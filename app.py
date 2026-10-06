@@ -1,3 +1,4 @@
+```python
 import io
 import numpy as np
 import pandas as pd
@@ -282,7 +283,7 @@ def create_share_card(best_strategy, annual_ret, sharpe, max_dd, tickers, capita
     # Metric Boxes
     # Box 1: Return
     ax.text(0.05, 0.35, "ผลตอบแทนต่อปี", fontsize=9, color='#94a3b8')
-    ax.text(0.05, 0.23, f"{annual_ret*100:+.1f}%", fontsize=16, fontweight='bold', color='#white')
+    ax.text(0.05, 0.23, f"{annual_ret*100:+.1f}%", fontsize=16, fontweight='bold', color='white')
     
     # Box 2: Sharpe
     ax.text(0.38, 0.35, "Sharpe Ratio", fontsize=9, color='#94a3b8')
@@ -560,4 +561,3 @@ with tab5:
 
 st.divider()
 st.caption("QuantLab Analytics Engine — เครื่องมือจำลองพอร์ตการลงทุนเชิงปริมาณเพื่อการเรียนรู้และวิจัยทางสถิติ")
-
