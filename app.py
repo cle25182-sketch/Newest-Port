@@ -774,7 +774,3 @@ with tab5:
 st.divider()
 st.caption("QuantLab Analytics Engine — เครื่องมือจำลองพอร์ตการลงทุนเชิงปริมาณเพื่อการเรียนรู้และวิจัยทางสถิติ")
 
-
-### 💡 คำแนะนำเพิ่มเติม:
-- รูปภาพ Share Card ในแท็บ 4 จะถูกเรนเดอร์ใหม่เป็นแบบ **Clean High-contrast Dark Theme** ที่อ่านง่าย คมชัด และไม่ติดปัญหา `` สี่เหลี่ยมแน่นอนครับ
-- แท็บ 3 กลับมาแสดงผลกราฟครบทั้ง 5 มิติ (Conf. Intervals, Win Tally, Correlation Heatmap, Efficient Frontier, และ Weight Stacked Area Charts) ครับ
