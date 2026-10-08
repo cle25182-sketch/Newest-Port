@@ -457,15 +457,6 @@ with st.sidebar:
     if "ticker_text" not in st.session_state:
         st.session_state.ticker_text = "PTT.BK, CPALL.BK, AOT.BK, KBANK.BK, ADVANC.BK"
 
-    st.caption("ชุดตัวอย่างด่วน:")
-    preset_col1, preset_col2 = st.columns(2)
-    with preset_col1:
-        if st.button("🇹🇭 หุ้นไทย (Top 5)", use_container_width=True):
-            st.session_state.ticker_text = "PTT.BK, CPALL.BK, AOT.BK, KBANK.BK, ADVANC.BK"
-    with preset_col2:
-        if st.button("🇺🇸 หุ้นสหรัฐฯ (Big Tech)", use_container_width=True):
-            st.session_state.ticker_text = "AAPL, MSFT, GOOGL, AMZN, NVDA"
-
     ticker_input = st.text_input(
         "พิมพ์รหัสหุ้น (คั่นด้วยจุลภาค ,)",
         key="ticker_text",
