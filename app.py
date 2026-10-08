@@ -68,19 +68,66 @@ def load_price_data(tickers, years_back):
 
 
 @st.cache_data(ttl=43200, show_spinner=False)
-def load_benchmark(years_back):
-    """ดึงดัชนี SET Index จริงเป็น Benchmark ภายนอก"""
+def load_benchmark(bench_choice, tickers, years_back):
+    """ดึงข้อมูล Benchmark ตามตัวเลือกที่กำหนด พร้อมระบบ Fallback สลับ Ticker เมื่อดึงไม่สำเร็จ"""
     import yfinance as yf
     end_date = datetime.today().strftime("%Y-%m-%d")
     start_date = (datetime.today() - timedelta(days=years_back * 365)).strftime("%Y-%m-%d")
-    try:
-        raw = yf.download("^SET.BK", start=start_date, end=end_date, progress=False, auto_adjust=True)["Close"]
-        if isinstance(raw, pd.DataFrame):
-            raw = raw.iloc[:, 0]
-        return raw.dropna()
-    except Exception:
-        return pd.Series(dtype=float)
+    
+    symbol_map = {
+        "SET Index (หุ้นไทย)": ["^SET.BK", "TDEX.BK"],
+        "S&P 500 (หุ้นใหญ่สหรัฐฯ)": ["^GSPC", "SPY"],
+        "Nasdaq 100 (หุ้นเทคฯ สหรัฐฯ)": ["^NDX", "QQQ"],
+        "MSCI ACWI (หุ้นทั่วโลก / พอร์ตผสม)": ["ACWI", "URTH"],
+    }
+    
+    # กรณีเลือกแบบอัตโนมัติ (Auto-detect)
+    if bench_choice == "⚡ อัตโนมัติ (Auto-detect)":
+        is_us = any(not t.endswith(".BK") for t in tickers)
+        is_thai = any(t.endswith(".BK") for t in tickers)
+        if is_us and is_thai:
+            symbols = ["ACWI", "URTH", "^GSPC"]
+            label = "MSCI ACWI (Global Mixed)"
+        elif is_us:
+            symbols = ["^GSPC", "SPY"]
+            label = "S&P 500"
+        else:
+            symbols = ["^SET.BK", "TDEX.BK"]
+            label = "SET Index"
+    else:
+        symbols = symbol_map.get(bench_choice, ["^SET.BK", "TDEX.BK"])
+        label = bench_choice.split(" ")[0]
 
+    for sym in symbols:
+        try:
+            raw = yf.download(sym, start=start_date, end=end_date, progress=False)
+            if raw.empty:
+                continue
+            
+            if isinstance(raw.columns, pd.MultiIndex):
+                if "Close" in raw.columns.levels[0]:
+                    series = raw["Close"].iloc[:, 0]
+                elif "Adj Close" in raw.columns.levels[0]:
+                    series = raw["Adj Close"].iloc[:, 0]
+                else:
+                    series = raw.iloc[:, 0]
+            else:
+                if "Close" in raw.columns:
+                    series = raw["Close"]
+                elif "Adj Close" in raw.columns:
+                    series = raw["Adj Close"]
+                else:
+                    series = raw.iloc[:, 0]
+                    
+            series = series.dropna()
+            if len(series) > 10:
+                if hasattr(series.index, "tz") and series.index.tz is not None:
+                    series.index = series.index.tz_localize(None)
+                return series, sym, label
+        except Exception:
+            continue
+            
+    return pd.Series(dtype=float), symbols[0], label
 
 @st.cache_data(ttl=43200, show_spinner=False)
 def load_market_caps(tickers):
