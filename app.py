@@ -43,6 +43,30 @@ st.markdown("""
 # ==============================================================================
 # 🛡️ Disclaimer Gate (กั้นหน้าจอคำเตือนเรื่องความเสี่ยง)
 # ==============================================================================
+if "terms_accepted" not in st.session_state:
+    st.session_state.terms_accepted = False
+
+if not st.session_state.terms_accepted:
+    st.title("📈 QuantLab — Portfolio Optimization Dashboard")
+    st.markdown("### ⚠️ ข้อตกลง เงื่อนไขการใช้งาน และคำเตือนเรื่องความเสี่ยง")
+    
+    st.info("""
+    **โปรดอ่านรายละเอียดก่อนเข้าใช้งาน:**
+    
+    1. **ไม่ใช่คำแนะนำการลงทุน (No Investment Advice):** เครื่องมือนี้จัดทำขึ้นเพื่อการจำลองทางสถิติและการเรียนรู้เชิงปริมาณเท่านั้น ไม่ใช่การให้คำแนะนำทางการเงิน การลงทุน หรือการชี้ชวนซื้อขายหลักทรัพย์ใดๆ
+    2. **ผลงานในอดีตไม่ได้การันตีอนาคต:** ผลการทดสอบย้อนหลัง (Backtesting) เป็นการนำข้อมูลราคาในอดีตมาจำลองเท่านั้น ไม่สามารถยืนยันหรือรับประกันผลตอบแทนในอนาคตได้
+    3. **ข้อจำกัดของแบบจำลอง:** การคำนวณตั้งอยู่บนสมมติฐานทางคณิตศาสตร์ ไม่ได้รวมปัจจัยเรื่องสภาพคล่อง อัตราภาษี เงินปันผล และสภาวะวิกฤตที่ไม่เคยเกิดขึ้นในอดีต
+    4. **ความรับผิดชอบ:** ผู้พัฒนาแอปพลิเคชันจะไม่รับผิดชอบต่อความสูญเสียหรือความเสียหายใดๆ ที่เกิดจากการนำข้อมูลหรือผลลัพธ์จากเครื่องมือนี้ไปใช้ในการตัดสินใจลงทุนจริง
+    """)
+    
+    st.markdown("---")
+    agree = st.checkbox("ข้าพเจ้าได้อ่าน เข้าใจ และยอมรับว่าการใช้งานแอปพลิเคชันนี้เป็นไปเพื่อการศึกษาและจำลองข้อมูลเท่านั้น")
+    
+    if st.button("🚀 เข้าสู่ระบบวิเคราะห์พอร์ต", type="primary", disabled=not agree):
+        st.session_state.terms_accepted = True
+        st.rerun()
+    
+    st.stop()
 
 # ==============================================================================
 # Data Ingestion & Shrinkage Analytics Engine
@@ -60,12 +84,16 @@ def load_price_data(tickers, years_back):
             return None, [], "ไม่พบข้อมูลราคาหุ้นสำหรับรหัสที่ระบุ"
         if isinstance(raw, pd.Series):
             raw = raw.to_frame(tickers[0])
+        
+        # ตัดโซนเวลา (Timezone) ออกเพื่อป้องกันปัญหา Reindex Mismatch
+        if hasattr(raw.index, "tz") and raw.index.tz is not None:
+            raw.index = raw.index.tz_localize(None)
+            
         raw = raw.ffill()
         valid = [t for t in tickers if t in raw.columns and raw[t].notna().sum() >= 30]
         return raw[valid].dropna(), valid, None
     except Exception as e:
         return None, [], f"ไม่สามารถเชื่อมต่อกับ Yahoo Finance ได้ในขณะนี้ ({str(e)})"
-
 
 @st.cache_data(ttl=43200, show_spinner=False)
 def load_benchmark(bench_choice, tickers, years_back):
@@ -169,7 +197,6 @@ def ledoit_wolf_shrinkage(X):
     shrunk_cov = delta * F + (1 - delta) * S
     return shrunk_cov, delta
 
-
 def get_weights(train_ret, train_last_price, shares_arr, n, use_marketcap):
     """คำนวณน้ำหนักพอร์ตสำหรับทั้ง 4 กลยุทธ์"""
     mu, cov = train_ret.mean(), train_ret.cov()
@@ -214,7 +241,6 @@ def evaluate(w, test_ret):
     max_dd = ((cum - running_max) / running_max).min()
     return cum[-1] - 1, ann_ret, ann_vol, sharpe, max_dd
 
-
 def run_walk_forward(data, shares_arr, use_marketcap, train_window, test_window):
     all_returns = data.pct_change().dropna()
     n = data.shape[1]
@@ -252,7 +278,6 @@ def run_walk_forward(data, shares_arr, use_marketcap, train_window, test_window)
     weight_history = {k: pd.DataFrame(v).set_index("round") for k, v in weight_history.items()}
     avg_delta = float(np.mean(deltas)) if deltas else 0.0
     return pd.DataFrame(records), round_num, failed, daily_returns, last_weights, weight_history, avg_delta, all_returns
-
 
 def cumulative_growth(daily_returns, capital, cost_pct, test_window):
     curves = {}
@@ -324,7 +349,6 @@ def create_share_card(best_strategy, annual_ret, sharpe, max_dd, tickers, capita
     plt.close(fig)
     return buf
 
-
 def win_tally_fig(df, strategies):
     fig, ax = plt.subplots(figsize=(8, 3.8), facecolor='#0f172a')
     ax.set_facecolor('#1e293b')
@@ -352,7 +376,6 @@ def win_tally_fig(df, strategies):
     
     plt.tight_layout()
     return fig
-
 
 def correlation_matrix_fig(all_returns):
     fig, ax = plt.subplots(figsize=(6, 4.2), facecolor='#0f172a')
@@ -424,7 +447,6 @@ def efficient_frontier_fig(all_returns, last_weights):
     plt.tight_layout()
     return fig
 
-
 def weight_evolution_fig(weight_df, tickers, title):
     fig, ax = plt.subplots(figsize=(6, 3.5), facecolor='#0f172a')
     ax.set_facecolor('#1e293b')
@@ -450,15 +472,27 @@ def weight_evolution_fig(weight_df, tickers, title):
 # UI Interface Section
 # ==============================================================================
 st.title("📈 QuantLab — ระบบจำลองจัดพอร์ตหุ้นเชิงปริมาณ")
-st.caption("ระบบจำลองพอร์ตการลงทุน ทดสอบด้วยวิธี Walk-Forward Validation")
+st.caption("ระบบจำลองพอร์ตการลงทุนแบบ Walk-Forward Validation ด้วยอัลกอริทึมทางคณิตศาสตร์และการเงิน")
 
-with st.expander("ขั้นตอนการเริ่มต้นใช้งาน"):
+with st.expander("👋 คำแนะนำเริ่มต้นใช้งานแบบรวดเร็ว (3 ขั้นตอนง่ายๆ)"):
     st.markdown("""
-    1. **เลือกหุ้นที่สนใจ** ในเมนูทางซ้าย (เลือกได้สูงสุด 10 ตัว)
-    2. **ใส่เงินลงทุนเริ่มต้น** และตั้งค่าระยะเวลาทดสอบย้อนหลัง
-    3. **กดปุ่ม 'เริ่มวิเคราะห์'** เพื่อดูว่ากลยุทธ์ไหนให้ผลลัพธ์คุ้มค่าความเสี่ยงมากที่สุด
+    1. **เลือกหุ้นที่สนใจ** ในเมนูทางซ้าย (เลือกได้สูงสุด 10 ตัว) หรือกดปุ่มตัวอย่างหุ้นไทย / หุ้นสหรัฐฯ
+    2. **เลือกตัวเปรียบเทียบดัชนี (Benchmark)** ให้ตรงกับประเภทหุ้นในพอร์ต
+    3. **กดปุ่ม '🚀 เริ่มวิเคราะห์พอร์ต'** เพื่อดูว่ากลยุทธ์ไหนให้ผลลัพธ์คุ้มค่าความเสี่ยงมากที่สุด!
     """)
 
+simple_mode = st.toggle("💡 เปิดโหมดอธิบายภาษาพูด (สำหรับผู้เริ่มต้นที่ไม่มีพื้นฐานการเงิน)")
+
+if simple_mode:
+    st.markdown("""
+    <div class="concept-box">
+    <b>💡 คู่มือความหมายฉบับเข้าใจง่าย:</b><br>
+    • <b>Sharpe Ratio (คะแนนความคุ้มค่า):</b> ยิ่งสูง ยิ่งดี! เหมือนการซื้อของที่ได้ของคุณภาพดีเยี่ยมในราคาคุ้มเงิน<br>
+    • <b>Volatility (ความแกว่งตัว):</b> ยิ่งเปอร์เซ็นต์สูง แปลว่าราคาขึ้นลงน่ากลัวตามความเสี่ยง<br>
+    • <b>Max Drawdown (สถิติเจ็บหนักสุด):</b> บอกว่าในอดีต เงินเคยลดลงจากจุดสูงสุดลึกลงไปกี่ % ก่อนจะฟื้นกลับมา<br>
+    • <b>Benchmark (ดัชนีอ้างอิง):</b> เส้นประเปรียบเทียบว่า พอร์ตที่เราจัดเองดีกว่าการซื้อดัชนีตลาดเฉยๆ หรือไม่
+    </div>
+    """, unsafe_allow_html=True)
 
 # Sidebar Configuration
 with st.sidebar:
@@ -467,6 +501,15 @@ with st.sidebar:
 
     if "ticker_text" not in st.session_state:
         st.session_state.ticker_text = "PTT.BK, CPALL.BK, AOT.BK, KBANK.BK, ADVANC.BK"
+
+    st.caption("ชุดตัวอย่างด่วน:")
+    preset_col1, preset_col2 = st.columns(2)
+    with preset_col1:
+        if st.button("🇹🇭 หุ้นไทย (Top 5)", use_container_width=True):
+            st.session_state.ticker_text = "PTT.BK, CPALL.BK, AOT.BK, KBANK.BK, ADVANC.BK"
+    with preset_col2:
+        if st.button("🇺🇸 หุ้นสหรัฐฯ (Big Tech)", use_container_width=True):
+            st.session_state.ticker_text = "AAPL, MSFT, GOOGL, AMZN, NVDA"
 
     ticker_input = st.text_input(
         "พิมพ์รหัสหุ้น (คั่นด้วยจุลภาค ,)",
@@ -481,6 +524,19 @@ with st.sidebar:
     else:
         selected = selected_raw
 
+    # เพิ่มตัวเลือก Benchmark ที่ขาดหายไป
+    benchmark_option = st.selectbox(
+        "ตัวเปรียบเทียบดัชนี (Benchmark)",
+        [
+            "⚡ อัตโนมัติ (Auto-detect)",
+            "🇹🇭 SET Index (หุ้นไทย)",
+            "🇺🇸 S&P 500 (หุ้นใหญ่สหรัฐฯ)",
+            "🚀 Nasdaq 100 (หุ้นเทคฯ สหรัฐฯ)",
+            "🌐 MSCI ACWI (หุ้นทั่วโลก / พอร์ตผสม)"
+        ],
+        help="เลือกดัชนีอ้างอิงเพื่อเปรียบเทียบผลตอบแทน Buy & Hold กับพอร์ตของคุณ"
+    )
+
     with st.expander("ตั้งค่าการทดสอบขั้นสูง"):
         train_window = st.slider("ช่วง Train ข้อมูล (วัน)", 126, 378, 252, step=21)
         test_window = st.slider("ช่วง Test ต่อรอบ (วัน)", 21, 126, 63, step=21)
@@ -491,7 +547,7 @@ with st.sidebar:
             ["ไม่ระบุ", "COVID-19 (ก.พ.–เม.ย. 2020)", "เงินเฟ้อ/ดอกเบี้ยขาขึ้น (2022)"]
         )
 
-    run = st.button("เริ่มวิเคราะห์", type="primary", use_container_width=True)
+    run = st.button("🚀 เริ่มวิเคราะห์พอร์ต", type="primary", use_container_width=True)
 
 if not run:
     st.info("👈 ปรับแต่งตัวเลือกทางซ้ายมือ แล้วกด **เริ่มวิเคราะห์พอร์ต** เพื่อประมวลผล")
@@ -615,7 +671,9 @@ with tab1:
 with tab2:
     st.subheader("เงินลงทุนสะสม ถ้าลงทุนต่อเนื่องตลอดช่วงทดสอบ (คิดทบต้นจริง + ค่าธรรมเนียม)")
     curves = cumulative_growth(daily_returns, capital, cost_pct, test_window)
-    bench_raw = load_benchmark(years_back)
+    
+    # ดึงข้อมูล Benchmark
+    bench_raw, bench_used_symbol, bench_label = load_benchmark(benchmark_option, tuple(selected), years_back)
 
     fig_cum, ax_cum = plt.subplots(figsize=(10, 4.5), facecolor='#0f172a')
     ax_cum.set_facecolor('#1e293b')
@@ -627,16 +685,19 @@ with tab2:
     bench_note = ""
     if not bench_raw.empty:
         combined_index = next(iter(curves.values())).index
+        if hasattr(combined_index, "tz") and combined_index.tz is not None:
+            combined_index = combined_index.tz_localize(None)
+            
         bench_aligned = bench_raw.reindex(bench_raw.index.union(combined_index)).ffill().reindex(combined_index)
         if bench_aligned.notna().sum() > 10:
             bench_ret = bench_aligned.pct_change().fillna(0)
             bench_curve = capital * (1 + bench_ret).cumprod()
-            ax_cum.plot(bench_curve.index, bench_curve.values, label="SET Index (Buy & Hold)", linewidth=1.8,
+            ax_cum.plot(bench_curve.index, bench_curve.values, label=f"{bench_label} ({bench_used_symbol})", linewidth=1.8,
                         linestyle="--", color="white")
         else:
-            bench_note = "ข้อมูล SET Index ไม่พอสำหรับช่วงเวลานี้"
+            bench_note = f"ข้อมูล {bench_used_symbol} ไม่พอสำหรับช่วงเวลานี้"
     else:
-        bench_note = "ดึงข้อมูล SET Index (^SET.BK) ไม่สำเร็จ"
+        bench_note = f"ดึงข้อมูล Benchmark ({bench_used_symbol}) ไม่สำเร็จ"
 
     ax_cum.axhline(capital, color="gray", linewidth=0.7, linestyle=":")
     ax_cum.set_xlabel("Date", color='#94a3b8')
@@ -774,5 +835,4 @@ with tab5:
     """)
 
 st.divider()
-st.caption("QuantLab Analytics Engine")
-
+st.caption("QuantLab Analytics Engine — เครื่องมือจำลองพอร์ตการลงทุนเชิงปริมาณเพื่อการเรียนรู้และวิจัยทางสถิติ")
