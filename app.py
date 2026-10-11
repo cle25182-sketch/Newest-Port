@@ -36,7 +36,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# แมปชื่อกลยุทธ์สำหรับแสดงผลบน Matplotlib Legend ให้สะอาดสวยงาม
 STRAT_DISPLAY_NAMES = {
     "equal": "A: Equal-Weight",
     "markowitz": "B: Markowitz",
@@ -204,7 +203,7 @@ def ledoit_wolf_shrinkage(X):
 
 
 def get_weights(train_ret, train_last_price, shares_arr, n, use_marketcap, rf_rate):
-    """คำนวณน้ำหนักพอร์ตสำหรับทั้ง 4 กลยุทธ์ (ใช้ Key แทน String ตายตัว)"""
+    """คำนวณน้ำหนักพอร์ตสำหรับทั้ง 4 กลยุทธ์"""
     mu, cov = train_ret.mean(), train_ret.cov()
     w_equal = np.array([1 / n] * n)
 
@@ -313,25 +312,6 @@ def cumulative_growth_with_turnover(daily_returns, weight_history, capital, cost
     return curves
 
 
-def block_bootstrap_pvalue(diff_values, block_size=4, n_boot=2000, seed=0):
-    rng = np.random.default_rng(seed)
-    n = len(diff_values)
-    if n < block_size * 2:
-        return np.nan
-    observed_mean = diff_values.mean()
-    n_blocks = int(np.ceil(n / block_size))
-    boot_means = np.empty(n_boot)
-    for b in range(n_boot):
-        idx = []
-        for _ in range(n_blocks):
-            start = rng.integers(0, n - block_size + 1)
-            idx.extend(range(start, start + block_size))
-        boot_means[b] = diff_values[idx[:n]].mean()
-    boot_centered = boot_means - boot_means.mean()
-    p_value = np.mean(np.abs(boot_centered) >= abs(observed_mean))
-    return p_value
-
-
 def create_share_card(best_key, annual_ret, sharpe, max_dd, tickers, capital, curr_name):
     fig, ax = plt.subplots(figsize=(8, 4.5), facecolor='#0f172a')
     ax.set_facecolor('#1e293b')
@@ -438,7 +418,6 @@ if len(selected) < 2:
     st.error("เหลือหุ้นที่ข้อมูลสมบูรณ์น้อยกว่า 2 ตัว กรุณาเปลี่ยนรหัสหุ้น")
     st.stop()
 
-# Robust Market Cap loading with graceful imputation fallback
 caps_raw = load_market_caps(tuple(selected))
 clean_caps = {t: _clean_shares(caps_raw.get(t)) for t in selected}
 valid_shares = [v for v in clean_caps.values() if v is not None and v > 0]
@@ -472,11 +451,11 @@ best_sharpe = summary.loc[best_key, "sharpe"]
 best_mdd = summary.loc[best_key, "max_drawdown"]
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 สรุปผลพอร์ต", 
-    "📈 การเติบโตของเงินทุน", 
-    "🔬 วิเคราะห์สถิติเชิงลึก", 
-    "📣 แชร์ผลลัพธ์",
-    "ℹ️ เกี่ยวกับข้อมูล & ข้อจำกัด"
+    "📊 สรุป", 
+    "📈 เติบโต", 
+    "🔬 สถิติเชิงลึก", 
+    "📣 แชร์",
+    "ℹ️ ข้อมูล"
 ])
 
 # TAB 1: สรุปผล
@@ -550,6 +529,35 @@ with tab2:
     ax_cum.legend(facecolor='#0f172a', edgecolor='#334155', labelcolor='white', loc="upper left", fontsize=9)
     st.pyplot(fig_cum)
 
+# TAB 3: วิเคราะห์สถิติเชิงลึก
+with tab3:
+    st.subheader("🔬 วิเคราะห์สถิติเชิงลึกและประสิทธิภาพของกลยุทธ์")
+    
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        st.markdown("#### ค่าเฉลี่ยความเข้มข้นของการลดสัญญาณรบกวน (Ledoit-Wolf Delta)")
+        st.info(f"ค่าเฉลี่ย Delta ($\delta$) ตลอดการทดสอบคือ **{avg_delta:.4f}**\n\n*หมายเหตุ: หากค่า $\delta$ เข้าใกล้ 1 แปลว่า Covariance Matrix ดั้งเดิมมีสัญญาณรบกวนสูงมาก ระบบจึงให้น้ำหนักกับการปรับลดความผันผวน (Shrinkage Target) มากขึ้น*")
+    
+    with col_s2:
+        st.markdown("#### สรุปผลความเสี่ยงสูงสุด (Max Drawdown เปรียบเทียบ)")
+        mdd_summary = df.groupby("strategy")["max_drawdown"].min() * 100
+        mdd_df = pd.DataFrame({"Max Drawdown (%)": mdd_summary.round(2)})
+        mdd_df.index = [STRAT_FULL_NAMES.get(k, k) for k in mdd_df.index]
+        st.dataframe(mdd_df, use_container_width=True)
+
+    st.markdown("#### เมทริกซ์ความสัมพันธ์ของสินทรัพย์ในพอร์ต (Correlation Heatmap)")
+    corr_matrix = all_returns_full.corr()
+    fig_corr, ax_corr = plt.subplots(figsize=(7, 4.5), facecolor='#0f172a')
+    ax_corr.set_facecolor('#1e293b')
+    cax = ax_corr.matshow(corr_matrix, cmap='coolwarm', vmin=-1, vmax=1)
+    fig_corr.colorbar(cax)
+    ax_corr.set_xticks(range(len(corr_matrix.columns)))
+    ax_corr.set_yticks(range(len(corr_matrix.columns)))
+    ax_corr.set_xticklabels(corr_matrix.columns, rotation=45, color='white', fontsize=8)
+    ax_corr.set_yticklabels(corr_matrix.columns, color='white', fontsize=8)
+    plt.title("Asset Return Correlation", color='white', fontsize=11, pad=15)
+    st.pyplot(fig_corr)
+
 # TAB 4: แชร์ผลลัพธ์
 with tab4:
     st.subheader("📣 แชร์สรุปผลลัพธ์พอร์ตของคุณ")
@@ -561,6 +569,15 @@ with tab4:
         file_name="quantlab_summary.png",
         mime="image/png"
     )
+
+# TAB 5: เกี่ยวกับข้อมูล
+with tab5:
+    st.subheader("ℹ️ ข้อมูลระบบและข้อจำกัดการทดสอบ")
+    st.markdown("""
+    - **Walk-Forward Validation**: จำลองการลงทุนเสมือนจริงโดยตัดข้อมูลออกเป็นช่วงๆ (Train และ Test) ป้องกันการรู้ล่วงหน้า (Look-ahead bias)
+    - **Rebalance Cost**: คิดค่าธรรมเนียมซื้อขายเฉพาะสัดส่วนที่มีการเปลี่ยนแปลงจริง (Turnover Rate) เพื่อความสมจริง
+    - **Currency Auto-detect**: ระบบตรวจสอบสกุลเงินอัตโนมัติจาก Suffix ของ Ticker หุ้น (.BK = THB, .T = JPY, .HK = HKD, ไม่มี Suffix = USD)
+    """)
 
 st.divider()
 st.caption("QuantLab Analytics Engine — เครื่องมือจำลองพอร์ตการลงทุนเชิงปริมาณเพื่อการเรียนรู้และวิจัยทางสถิติ")
