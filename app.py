@@ -14,7 +14,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-RF_RATE = 0.0
 MAX_TICKERS_ALLOWED = 10  # จำกัดจำนวนหุ้นสูงสุดเพื่อความรวดเร็วในการประมวลผล
 
 # Custom CSS Styling
@@ -37,18 +36,40 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# แมปชื่อกลยุทธ์สำหรับแสดงผลบน Matplotlib Legend ให้สะอาดสวยงาม ไม่ติด Font Box
+# แมปชื่อกลยุทธ์สำหรับแสดงผลบน Matplotlib Legend ให้สะอาดสวยงาม
 STRAT_DISPLAY_NAMES = {
-    "A: Equal-weight (สัดส่วนเท่ากัน)": "A: Equal-Weight",
-    "B: Markowitz (สมการคณิตศาสตร์)": "B: Markowitz",
-    "C: Market-cap (ตามมูลค่าบริษัท)": "C: Market-Cap",
-    "D: Markowitz-Shrinkage (ลดสัญญาณรบกวน)": "D: Shrinkage"
+    "equal": "A: Equal-Weight",
+    "markowitz": "B: Markowitz",
+    "mcap": "C: Market-Cap",
+    "shrinkage": "D: Shrinkage"
 }
+
+STRAT_FULL_NAMES = {
+    "equal": "A: Equal-weight (สัดส่วนเท่ากัน)",
+    "markowitz": "B: Markowitz (สมการคณิตศาสตร์)",
+    "mcap": "C: Market-cap (ตามมูลค่าบริษัท)",
+    "shrinkage": "D: Markowitz-Shrinkage (ลดสัญญาณรบกวน)"
+}
+
+
+def get_currency_info(tickers):
+    """ตรวจสอบสกุลเงินอัตโนมัติจาก Ticker Suffix"""
+    if not tickers:
+        return "THB", "บาท"
+    if all(t.endswith(".BK") for t in tickers):
+        return "THB", "บาท"
+    if all(t.endswith(".T") for t in tickers):
+        return "JPY", "เยน"
+    if all(t.endswith(".HK") for t in tickers):
+        return "HKD", "ดอลลาร์ฮ่องกง"
+    if all(not t.endswith((".BK", ".T", ".HK")) for t in tickers):
+        return "USD", "ดอลลาร์สหรัฐ"
+    return "USD / Mixed", "ดอลลาร์/สกุลเงินผสม"
 
 
 @st.cache_data(ttl=43200, show_spinner=False)
 def load_price_data(tickers, years_back):
-    """ดึงข้อมูลราคาหุ้นย้อนหลัง พร้อมระบบจัดการ Error และเพิ่ม TTL แคช 12 ชั่วโมง"""
+    """ดึงข้อมูลราคาหุ้นย้อนหลัง พร้อมระบบจัดการ Error และตัด Timezone"""
     import yfinance as yf
     end_date = datetime.today().strftime("%Y-%m-%d")
     start_date = (datetime.today() - timedelta(days=years_back * 365)).strftime("%Y-%m-%d")
@@ -60,7 +81,6 @@ def load_price_data(tickers, years_back):
         if isinstance(raw, pd.Series):
             raw = raw.to_frame(tickers[0])
             
-        # ตัดโซนเวลา (Timezone) ออกเพื่อป้องกันปัญหา Reindex Mismatch
         if hasattr(raw.index, "tz") and raw.index.tz is not None:
             raw.index = raw.index.tz_localize(None)
             
@@ -73,32 +93,31 @@ def load_price_data(tickers, years_back):
 
 @st.cache_data(ttl=43200, show_spinner=False)
 def load_benchmark(bench_choice, tickers, years_back):
-    """ดึงข้อมูล Benchmark ตามตัวเลือกที่กำหนด พร้อมระบบ Fallback สลับ Ticker เมื่อดึงไม่สำเร็จ"""
+    """ดึงข้อมูล Benchmark พร้อมรองรับตลาดหุ้นไทย สหรัฐ ญี่ปุ่น ฮ่องกง และพอร์ตผสม"""
     import yfinance as yf
     end_date = datetime.today().strftime("%Y-%m-%d")
     start_date = (datetime.today() - timedelta(days=years_back * 365)).strftime("%Y-%m-%d")
     
-    # แมปปิ้งตรงกับ Selectbox ใน Sidebar แบบ 100% (รวมอีโมจิ)
     symbol_map = {
         "🇹🇭 SET Index (หุ้นไทย)": (["^SET.BK", "TDEX.BK"], "SET Index"),
         "🇺🇸 S&P 500 (หุ้นใหญ่สหรัฐฯ)": (["^GSPC", "SPY"], "S&P 500"),
         "🚀 Nasdaq 100 (หุ้นเทคฯ สหรัฐฯ)": (["^NDX", "QQQ"], "Nasdaq 100"),
+        "🇯🇵 Nikkei 225 (หุ้นญี่ปุ่น)": (["^N225", "EWJ"], "Nikkei 225"),
+        "🇭🇰 Hang Seng Index (หุ้นฮ่องกง)": (["^HSI", "2800.HK"], "Hang Seng"),
         "🌐 MSCI ACWI (หุ้นทั่วโลก / พอร์ตผสม)": (["ACWI", "URTH"], "MSCI ACWI"),
     }
     
-    # กรณีเลือกแบบอัตโนมัติ (Auto-detect)
     if bench_choice == "⚡ อัตโนมัติ (Auto-detect)":
-        is_us = any(not t.endswith(".BK") for t in tickers)
-        is_thai = any(t.endswith(".BK") for t in tickers)
-        if is_us and is_thai:
-            symbols = ["ACWI", "URTH", "^GSPC"]
-            label = "MSCI ACWI"
-        elif is_us:
-            symbols = ["^GSPC", "SPY"]
-            label = "S&P 500"
+        if all(t.endswith(".BK") for t in tickers):
+            symbols, label = ["^SET.BK", "TDEX.BK"], "SET Index"
+        elif all(t.endswith(".T") for t in tickers):
+            symbols, label = ["^N225", "EWJ"], "Nikkei 225"
+        elif all(t.endswith(".HK") for t in tickers):
+            symbols, label = ["^HSI", "2800.HK"], "Hang Seng"
+        elif all(not t.endswith((".BK", ".T", ".HK")) for t in tickers):
+            symbols, label = ["^GSPC", "SPY"], "S&P 500"
         else:
-            symbols = ["^SET.BK", "TDEX.BK"]
-            label = "SET Index"
+            symbols, label = ["ACWI", "URTH", "^GSPC"], "MSCI ACWI"
     else:
         symbols, label = symbol_map.get(bench_choice, (["^SET.BK", "TDEX.BK"], "Benchmark"))
 
@@ -140,7 +159,15 @@ def load_market_caps(tickers):
     caps = {}
     for t in tickers:
         try:
-            caps[t] = yf.Ticker(t).info.get("sharesOutstanding")
+            t_obj = yf.Ticker(t)
+            info = t_obj.info
+            shares = info.get("sharesOutstanding")
+            if shares is None:
+                mc = info.get("marketCap")
+                price = info.get("regularMarketPrice") or info.get("previousClose")
+                if mc and price:
+                    shares = mc / price
+            caps[t] = shares
         except Exception:
             caps[t] = None
     return caps
@@ -176,13 +203,13 @@ def ledoit_wolf_shrinkage(X):
     return shrunk_cov, delta
 
 
-def get_weights(train_ret, train_last_price, shares_arr, n, use_marketcap):
-    """คำนวณน้ำหนักพอร์ตสำหรับทั้ง 4 กลยุทธ์"""
+def get_weights(train_ret, train_last_price, shares_arr, n, use_marketcap, rf_rate):
+    """คำนวณน้ำหนักพอร์ตสำหรับทั้ง 4 กลยุทธ์ (ใช้ Key แทน String ตายตัว)"""
     mu, cov = train_ret.mean(), train_ret.cov()
     w_equal = np.array([1 / n] * n)
 
     def neg_sharpe(w, mu_arr, cov_arr):
-        ret = np.sum(mu_arr * w) * 252 - RF_RATE
+        ret = np.sum(mu_arr * w) * 252 - rf_rate
         vol = np.sqrt(max(w @ cov_arr @ w, 0)) * np.sqrt(252)
         return -ret / vol if vol > 1e-10 else 1e6
 
@@ -201,28 +228,31 @@ def get_weights(train_ret, train_last_price, shares_arr, n, use_marketcap):
     w_shrink = opt_shrink.x if opt_shrink.success else w_equal
 
     weights = {
-        "A: Equal-weight (สัดส่วนเท่ากัน)": w_equal,
-        "B: Markowitz (สมการคณิตศาสตร์)": w_markowitz,
-        "D: Markowitz-Shrinkage (ลดสัญญาณรบกวน)": w_shrink,
+        "equal": w_equal,
+        "markowitz": w_markowitz,
+        "shrinkage": w_shrink,
     }
-    if use_marketcap:
+    if use_marketcap and shares_arr is not None and len(shares_arr) == n:
         mcap = train_last_price * shares_arr
-        weights["C: Market-cap (ตามมูลค่าบริษัท)"] = mcap / mcap.sum()
+        if mcap.sum() > 0:
+            weights["mcap"] = mcap / mcap.sum()
+        else:
+            weights["mcap"] = w_equal
     return weights, (opt.success and opt_shrink.success), delta
 
 
-def evaluate(w, test_ret):
+def evaluate(w, test_ret, rf_rate):
     port_ret = test_ret.values @ w
     cum = np.cumprod(1 + port_ret)
     ann_ret = port_ret.mean() * 252
     ann_vol = port_ret.std() * np.sqrt(252)
-    sharpe = (ann_ret - RF_RATE) / ann_vol if ann_vol > 1e-10 else np.nan
+    sharpe = (ann_ret - rf_rate) / ann_vol if ann_vol > 1e-10 else np.nan
     running_max = np.maximum.accumulate(cum)
     max_dd = ((cum - running_max) / running_max).min()
     return cum[-1] - 1, ann_ret, ann_vol, sharpe, max_dd
 
 
-def run_walk_forward(data, shares_arr, use_marketcap, train_window, test_window):
+def run_walk_forward(data, shares_arr, use_marketcap, train_window, test_window, rf_rate):
     all_returns = data.pct_change().dropna()
     n = data.shape[1]
     records, failed = [], 0
@@ -236,16 +266,16 @@ def run_walk_forward(data, shares_arr, use_marketcap, train_window, test_window)
         train_ret = all_returns.iloc[start: start + train_window]
         test_ret = all_returns.iloc[start + train_window: start + train_window + test_window]
         train_last_price = data.iloc[start + train_window].values
-        weights, ok, delta = get_weights(train_ret, train_last_price, shares_arr, n, use_marketcap)
+        weights, ok, delta = get_weights(train_ret, train_last_price, shares_arr, n, use_marketcap, rf_rate)
         failed += 0 if ok else 1
         deltas.append(delta)
         last_weights = weights
-        for name, w in weights.items():
-            weight_history.setdefault(name, []).append({"round": round_num, **{t: w[i] for i, t in enumerate(data.columns)}})
-            total, ar, av, sh, mdd = evaluate(w, test_ret)
+        for key, w in weights.items():
+            weight_history.setdefault(key, []).append({"round": round_num, **{t: w[i] for i, t in enumerate(data.columns)}})
+            total, ar, av, sh, mdd = evaluate(w, test_ret, rf_rate)
             records.append({
                 "round": round_num,
-                "strategy": name,
+                "strategy": key,
                 "total_return": total,
                 "ann_return": ar,
                 "ann_vol": av,
@@ -253,7 +283,7 @@ def run_walk_forward(data, shares_arr, use_marketcap, train_window, test_window)
                 "max_drawdown": mdd
             })
             port_ret_series = pd.Series(test_ret.values @ w, index=test_ret.index)
-            daily_returns.setdefault(name, []).append(port_ret_series)
+            daily_returns.setdefault(key, []).append(port_ret_series)
         start += test_window
     daily_returns = {k: pd.concat(v) for k, v in daily_returns.items()}
     weight_history = {k: pd.DataFrame(v).set_index("round") for k, v in weight_history.items()}
@@ -261,16 +291,25 @@ def run_walk_forward(data, shares_arr, use_marketcap, train_window, test_window)
     return pd.DataFrame(records), round_num, failed, daily_returns, last_weights, weight_history, avg_delta, all_returns
 
 
-def cumulative_growth(daily_returns, capital, cost_pct, test_window):
+def cumulative_growth_with_turnover(daily_returns, weight_history, capital, cost_pct, test_window):
     curves = {}
-    for name, ret_series in daily_returns.items():
+    for key, ret_series in daily_returns.items():
         equity, values = capital, []
-        for i, r in enumerate(ret_series.values):
-            if i > 0 and i % test_window == 0:
-                equity *= (1 - cost_pct)
+        w_df = weight_history.get(key)
+        
+        for i, (date, r) in enumerate(ret_series.items()):
+            if i > 0 and i % test_window == 0 and w_df is not None:
+                round_idx = (i // test_window) + 1
+                if round_idx in w_df.index and (round_idx - 1) in w_df.index:
+                    w_old = w_df.loc[round_idx - 1].values
+                    w_new = w_df.loc[round_idx].values
+                    turnover = np.sum(np.abs(w_new - w_old)) / 2.0
+                    rebalance_cost = equity * turnover * cost_pct
+                    equity -= rebalance_cost
+            
             equity *= (1 + r)
             values.append(equity)
-        curves[name] = pd.Series(values, index=ret_series.index)
+        curves[key] = pd.Series(values, index=ret_series.index)
     return curves
 
 
@@ -293,23 +332,19 @@ def block_bootstrap_pvalue(diff_values, block_size=4, n_boot=2000, seed=0):
     return p_value
 
 
-def create_share_card(best_strategy, annual_ret, sharpe, max_dd, tickers, capital):
-    """สร้างภาพการ์ดสรุปผลลัพธ์ด้วยตัวอักษรภาษาอังกฤษเพื่อป้องกันฟอนต์สี่เหลี่ยม (Missing Glyph) บน Cloud"""
+def create_share_card(best_key, annual_ret, sharpe, max_dd, tickers, capital, curr_name):
     fig, ax = plt.subplots(figsize=(8, 4.5), facecolor='#0f172a')
     ax.set_facecolor('#1e293b')
     ax.axis('off')
 
-    # Header
     ax.text(0.05, 0.88, "QUANTLAB PORTFOLIO SUMMARY", fontsize=15, fontweight='bold', color='#38bdf8')
     ticker_str = ", ".join(tickers[:6]) + ("..." if len(tickers) > 6 else "")
     ax.text(0.05, 0.80, f"Assets: {ticker_str}", fontsize=9, color='#94a3b8')
 
-    # Strategy Title
     ax.text(0.05, 0.66, "BEST STRATEGY", fontsize=9, fontweight='bold', color='#cbd5e1')
-    strat_clean = STRAT_DISPLAY_NAMES.get(best_strategy, best_strategy)
+    strat_clean = STRAT_DISPLAY_NAMES.get(best_key, best_key)
     ax.text(0.05, 0.54, strat_clean, fontsize=16, fontweight='bold', color='#4ade80')
 
-    # Metrics
     ax.text(0.05, 0.35, "ANNUAL RETURN", fontsize=8, color='#94a3b8')
     ax.text(0.05, 0.22, f"{annual_ret*100:+.1f}%", fontsize=15, fontweight='bold', color='white')
 
@@ -319,8 +354,7 @@ def create_share_card(best_strategy, annual_ret, sharpe, max_dd, tickers, capita
     ax.text(0.70, 0.35, "MAX DRAWDOWN", fontsize=8, color='#94a3b8')
     ax.text(0.70, 0.22, f"{max_dd*100:.1f}%", fontsize=15, fontweight='bold', color='#f87171')
 
-    # Footer
-    ax.text(0.05, 0.08, f"Initial Capital: {capital:,.0f} THB  |  Generated by QuantLab Analytics Engine", fontsize=8, color='#64748b')
+    ax.text(0.05, 0.08, f"Initial Capital: {capital:,.0f} {curr_name}  |  Generated by QuantLab Engine", fontsize=8, color='#64748b')
 
     plt.tight_layout()
     buf = io.BytesIO()
@@ -330,161 +364,33 @@ def create_share_card(best_strategy, annual_ret, sharpe, max_dd, tickers, capita
     return buf
 
 
-def win_tally_fig(df, strategies):
-    fig, ax = plt.subplots(figsize=(8, 3.8), facecolor='#0f172a')
-    ax.set_facecolor('#1e293b')
-    
-    piv = df.pivot(index='round', columns='strategy', values='sharpe')
-    winners = piv.idxmax(axis=1)
-    
-    tally = pd.DataFrame(0, index=piv.index, columns=strategies)
-    for r in piv.index:
-        w = winners.loc[r]
-        tally.loc[r, w] = 1
-    
-    cum_tally = tally.cumsum()
-    colors = ['#38bdf8', '#facc15', '#4ade80', '#c084fc']
-    for i, strat in enumerate(strategies):
-        short_name = STRAT_DISPLAY_NAMES.get(strat, strat)
-        ax.plot(cum_tally.index, cum_tally[strat], label=short_name, color=colors[i % len(colors)], linewidth=2)
-        
-    ax.set_title("Cumulative Wins (Highest Sharpe Per Round)", color='white', fontsize=11, fontweight='bold')
-    ax.set_xlabel("Walk-Forward Round", color='#94a3b8')
-    ax.set_ylabel("Wins Count", color='#94a3b8')
-    ax.tick_params(colors='#cbd5e1')
-    ax.grid(True, linestyle='--', alpha=0.2)
-    ax.legend(facecolor='#0f172a', edgecolor='#334155', labelcolor='white', fontsize=8)
-    
-    plt.tight_layout()
-    return fig
-
-
-def correlation_matrix_fig(all_returns):
-    fig, ax = plt.subplots(figsize=(6, 4.2), facecolor='#0f172a')
-    ax.set_facecolor('#1e293b')
-    
-    corr = all_returns.corr()
-    cax = ax.matshow(corr, cmap='coolwarm', vmin=-1, vmax=1)
-    fig.colorbar(cax, ax=ax)
-    
-    tickers = corr.columns.tolist()
-    ax.set_xticks(range(len(tickers)))
-    ax.set_yticks(range(len(tickers)))
-    ax.set_xticklabels(tickers, rotation=45, color='white', ha='left', fontsize=8)
-    ax.set_yticklabels(tickers, color='white', fontsize=8)
-    
-    for i in range(len(tickers)):
-        for j in range(len(tickers)):
-            val = corr.iloc[i, j]
-            ax.text(j, i, f"{val:.2f}", ha='center', va='center', color='black' if abs(val) < 0.6 else 'white', fontsize=8)
-            
-    ax.set_title("Asset Return Correlation Matrix", color='white', fontsize=11, fontweight='bold', pad=20)
-    plt.tight_layout()
-    return fig
-
-
-def efficient_frontier_fig(all_returns, last_weights):
-    fig, ax = plt.subplots(figsize=(8, 4.2), facecolor='#0f172a')
-    ax.set_facecolor('#1e293b')
-    
-    mu = all_returns.mean() * 252
-    cov = all_returns.cov() * 252
-    n_assets = len(mu)
-    
-    np.random.seed(42)
-    n_portfolios = 2500
-    p_rets, p_vols, p_sharpes = [], [], []
-    
-    for _ in range(n_portfolios):
-        w = np.random.dirichlet(np.ones(n_assets))
-        ret = np.sum(mu * w)
-        vol = np.sqrt(w @ cov @ w)
-        sharpe = ret / vol if vol > 1e-6 else 0
-        p_rets.append(ret)
-        p_vols.append(vol)
-        p_sharpes.append(sharpe)
-        
-    sc = ax.scatter(np.array(p_vols)*100, np.array(p_rets)*100, c=p_sharpes, cmap='viridis', alpha=0.4, s=15)
-    cbar = fig.colorbar(sc, ax=ax)
-    cbar.set_label('Sharpe Ratio', color='white')
-    cbar.ax.yaxis.set_tick_params(color='white')
-    plt.setp(plt.getp(cbar.ax, 'yticklabels'), color='white')
-    
-    markers = ['o', 's', '^', 'D']
-    colors = ['#38bdf8', '#facc15', '#4ade80', '#c084fc']
-    
-    for i, (strat_name, w) in enumerate(last_weights.items()):
-        strat_ret = np.sum(mu * w) * 100
-        strat_vol = np.sqrt(w @ cov @ w) * 100
-        short_name = STRAT_DISPLAY_NAMES.get(strat_name, strat_name)
-        ax.scatter(strat_vol, strat_ret, color=colors[i % len(colors)], marker=markers[i % len(markers)],
-                   s=120, edgecolors='white', linewidth=1.5, label=f"{short_name} (Latest)", zorder=5)
-        
-    ax.set_title("Simulated Efficient Frontier & Strategy Positions", color='white', fontsize=11, fontweight='bold')
-    ax.set_xlabel("Annualized Volatility (%)", color='#94a3b8')
-    ax.set_ylabel("Annualized Return (%)", color='#94a3b8')
-    ax.tick_params(colors='#cbd5e1')
-    ax.grid(True, linestyle='--', alpha=0.2)
-    ax.legend(facecolor='#0f172a', edgecolor='#334155', labelcolor='white', fontsize=8, loc='upper left')
-    
-    plt.tight_layout()
-    return fig
-
-
-def weight_evolution_fig(weight_df, tickers, title):
-    fig, ax = plt.subplots(figsize=(6, 3.5), facecolor='#0f172a')
-    ax.set_facecolor('#1e293b')
-    
-    rounds = weight_df.index
-    weights = [weight_df[t].values for t in tickers if t in weight_df.columns]
-    valid_tickers = [t for t in tickers if t in weight_df.columns]
-    
-    if weights:
-        ax.stackplot(rounds, weights, labels=valid_tickers, alpha=0.85)
-        
-    ax.set_title(f"Weight Evolution: {title}", color='white', fontsize=10, fontweight='bold')
-    ax.set_xlabel("Round", color='#94a3b8', fontsize=8)
-    ax.set_ylabel("Allocation Ratio", color='#94a3b8', fontsize=8)
-    ax.tick_params(colors='#cbd5e1', labelsize=8)
-    ax.set_ylim(0, 1)
-    ax.legend(loc='upper right', facecolor='#0f172a', edgecolor='#334155', labelcolor='white', fontsize=7, bbox_to_anchor=(1.35, 1))
-    
-    plt.tight_layout()
-    return fig
-
-
 st.title("📈 QuantLab — ระบบจำลองจัดพอร์ตหุ้นเชิงปริมาณ")
 st.caption("ระบบจำลองพอร์ตการลงทุน ทดสอบด้วยวิธี Walk-Forward Validation")
-
-with st.expander("ขั้นตอนการเริ่มต้นใช้งาน"):
-    st.markdown("""
-    1. **เลือกหุ้นที่สนใจ** ในเมนูทางซ้าย (เลือกได้สูงสุด 10 ตัว)
-    2. **ใส่เงินลงทุนเริ่มต้น** และตั้งค่าระยะเวลาทดสอบย้อนหลัง
-    3. **กดปุ่ม 'เริ่มวิเคราะห์'** เพื่อดูว่ากลยุทธ์ไหนให้ผลลัพธ์คุ้มค่าความเสี่ยงมากที่สุด
-    """)
 
 # Sidebar Configuration
 with st.sidebar:
     st.header("⚙️ ตั้งค่าการวิเคราะห์")
-    capital = st.number_input("เงินลงทุนเริ่มต้น (บาท)", min_value=1000, value=100000, step=5000)
-
+    
     if "ticker_text" not in st.session_state:
         st.session_state.ticker_text = "PTT.BK, CPALL.BK, AOT.BK, KBANK.BK, ADVANC.BK"
 
     ticker_input = st.text_input(
         "พิมพ์รหัสหุ้น (คั่นด้วยจุลภาค ,)",
         key="ticker_text",
-        help="ใส่รหัสหุ้น Yahoo Finance เช่น PTT.BK, AAPL"
+        help="ใส่รหัสหุ้น Yahoo Finance เช่น PTT.BK, AAPL, 7203.T, 0700.HK"
     )
     selected_raw = list(dict.fromkeys([t.strip().upper() for t in ticker_input.split(",") if t.strip()]))
 
     if len(selected_raw) > MAX_TICKERS_ALLOWED:
-        st.warning(f"⚠️ เพื่อความรวดเร็ว ระบบจำกัดสูงสุดที่ {MAX_TICKERS_ALLOWED} หุ้น (เลือก {MAX_TICKERS_ALLOWED} ตัวแรกให้)")
+        st.warning(f"⚠️ ระบบจำกัดสูงสุดที่ {MAX_TICKERS_ALLOWED} หุ้น (เลือก {MAX_TICKERS_ALLOWED} ตัวแรกให้)")
         selected = selected_raw[:MAX_TICKERS_ALLOWED]
     else:
         selected = selected_raw
 
-    # เมนูเลือก Benchmark ใน Sidebar
+    # Dynamic Currency Detection
+    curr_code, curr_name = get_currency_info(selected)
+    capital = st.number_input(f"เงินลงทุนเริ่มต้น ({curr_name} / {curr_code})", min_value=1000, value=100000, step=5000)
+
     benchmark_option = st.selectbox(
         "ตัวเปรียบเทียบดัชนี (Benchmark)",
         [
@@ -492,15 +398,18 @@ with st.sidebar:
             "🇹🇭 SET Index (หุ้นไทย)",
             "🇺🇸 S&P 500 (หุ้นใหญ่สหรัฐฯ)",
             "🚀 Nasdaq 100 (หุ้นเทคฯ สหรัฐฯ)",
+            "🇯🇵 Nikkei 225 (หุ้นญี่ปุ่น)",
+            "🇭🇰 Hang Seng Index (หุ้นฮ่องกง)",
             "🌐 MSCI ACWI (หุ้นทั่วโลก / พอร์ตผสม)"
         ],
-        help="เลือกดัชนีอ้างอิงเพื่อเปรียบเทียบผลตอบแทน Buy & Hold กับพอร์ตของคุณ"
+        help="เลือกดัชนีอ้างอิงเพื่อเปรียบเทียบผลตอบแทนกับพอร์ตของคุณ"
     )
 
     with st.expander("ตั้งค่าการทดสอบขั้นสูง"):
+        rf_rate_pct = st.slider("อัตราดอกเบี้ยไร้ความเสี่ยง Rf (%/ปี)", 0.0, 5.0, 2.0, step=0.25) / 100
         train_window = st.slider("ช่วง Train ข้อมูล (วัน)", 126, 378, 252, step=21)
         test_window = st.slider("ช่วง Test ต่อรอบ (วัน)", 21, 126, 63, step=21)
-        years_back = st.slider("ข้อมูลย้อนหลัง (ปี)", 3, 10, 5)
+        years_back = st.slider("ข้อมูลย้อนหลัง (ปี)", 3, 25, 5)
         cost_pct = st.slider("ค่าธรรมเนียมซื้อขายปรับพอร์ต (%)", 0.0, 1.0, 0.1, step=0.05) / 100
         stress_option = st.selectbox(
             "จำลองวิกฤตเฉพาะช่วง",
@@ -517,13 +426,11 @@ if len(selected) < 2:
     st.error("กรุณาใส่รหัสหุ้นอย่างน้อย 2 ตัวขึ้นไปเพื่อจัดพอร์ตกระจายความเสี่ยง")
     st.stop()
 
-
 with st.spinner("กำลังดึงราคาหุ้นและประมวลผลทางสถิติ..."):
     data, valid_tickers, error_msg = load_price_data(tuple(selected), years_back)
     
     if error_msg:
         st.error(f"⚠️ การดึงข้อมูลล้มเหลว: {error_msg}")
-        st.info("💡 **ข้อแนะนำในการแก้ไข:**\n- ลองเว้นระยะเวลา 1-2 นาทีแล้วกดใหม่อีกครั้ง\n- ตรวจสอบว่ารหัสหุ้นถูกต้อง เช่น หุ้นไทยต้องลงท้ายด้วย `.BK` (เช่น PTT.BK)")
         st.stop()
 
 selected = valid_tickers
@@ -531,13 +438,24 @@ if len(selected) < 2:
     st.error("เหลือหุ้นที่ข้อมูลสมบูรณ์น้อยกว่า 2 ตัว กรุณาเปลี่ยนรหัสหุ้น")
     st.stop()
 
+# Robust Market Cap loading with graceful imputation fallback
 caps_raw = load_market_caps(tuple(selected))
 clean_caps = {t: _clean_shares(caps_raw.get(t)) for t in selected}
-use_marketcap = all(clean_caps[t] is not None for t in selected)
-shares_arr = np.array([clean_caps[t] or 0 for t in selected])
+valid_shares = [v for v in clean_caps.values() if v is not None and v > 0]
+
+if valid_shares:
+    median_shares = np.median(valid_shares)
+    for t in selected:
+        if clean_caps[t] is None:
+            clean_caps[t] = median_shares
+    use_marketcap = True
+    shares_arr = np.array([clean_caps[t] for t in selected])
+else:
+    use_marketcap = False
+    shares_arr = None
 
 df, n_folds, n_failed, daily_returns, last_weights, weight_history, avg_delta, all_returns_full = run_walk_forward(
-    data, shares_arr, use_marketcap, train_window, test_window
+    data, shares_arr, use_marketcap, train_window, test_window, rf_rate_pct
 )
 
 if df.empty:
@@ -546,25 +464,12 @@ if df.empty:
 
 strategies = list(df["strategy"].unique())
 summary = df.groupby("strategy")[["ann_return", "ann_vol", "sharpe", "max_drawdown"]].mean().reindex(strategies)
-best_strategy = summary["sharpe"].idxmax()
-best_return = summary.loc[best_strategy, "ann_return"]
-best_vol = summary.loc[best_strategy, "ann_vol"]
-best_sharpe = summary.loc[best_strategy, "sharpe"]
-best_mdd = summary.loc[best_strategy, "max_drawdown"]
-
-# Calculate pairwise tests for best strategy significance
-wide = df.pivot(index="round", columns="strategy", values="sharpe")
-significantly_better_than_all = True
-for strat in strategies:
-    if strat != best_strategy:
-        diff = wide[best_strategy] - wide[strat]
-        _, p_val = stats.ttest_rel(wide[best_strategy], wide[strat])
-        if p_val >= 0.05:
-            significantly_better_than_all = False
-            break
-
-avg_corr = float(all_returns_full.corr().values[np.triu_indices_from(all_returns_full.corr().values, k=1)].mean())
-
+best_key = summary["sharpe"].idxmax()
+best_strategy = STRAT_FULL_NAMES.get(best_key, best_key)
+best_return = summary.loc[best_key, "ann_return"]
+best_vol = summary.loc[best_key, "ann_vol"]
+best_sharpe = summary.loc[best_key, "sharpe"]
+best_mdd = summary.loc[best_key, "max_drawdown"]
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📊 สรุปผลพอร์ต", 
@@ -574,19 +479,11 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "ℹ️ เกี่ยวกับข้อมูล & ข้อจำกัด"
 ])
 
-# ================= TAB 1: สรุปผล =================
+# TAB 1: สรุปผล
 with tab1:
-    st.subheader("สรุปผล: กลยุทธ์ที่ Sharpe ดีที่สุดในการทดสอบนี้")
-    if significantly_better_than_all:
-        st.success(
-            f"🏆 **{best_strategy}** ให้ Sharpe ratio ดีที่สุด และแตกต่างจากกลยุทธ์อื่นทุกตัวอย่างมีนัยสำคัญทางสถิติ (p < 0.05) "
-            f"ในการทดสอบ {n_folds} รอบนี้"
-        )
-    else:
-        st.info(
-            f"💡 **{best_strategy}** ให้ Sharpe ratio เฉลี่ยสูงสุดในการทดสอบนี้ แต่ยัง**ไม่ต่างจากกลยุทธ์อื่นอย่างมีนัยสำคัญทางสถิติ** "
-            f"(ดูตาราง p-value ในแท็บ 'วิเคราะห์เชิงลึก') — ควรตีความว่า \"ยังแยกไม่ออกชัดเจนว่าวิธีไหนดีกว่าจริง\" มากกว่าฟันธงว่าตัวนี้ชนะ"
-        )
+    st.subheader(f"สรุปผล: กลยุทธ์ที่ Sharpe ดีที่สุดในการทดสอบนี้ ({curr_code})")
+    if n_failed > 0:
+        st.warning(f"⚠️ มีการคำนวณ Markowitz ไม่ลู่เข้าจำนวน {n_failed}/{n_folds} รอบ (ระบบใช้ Equal-Weight สำรองในรอบดังกล่าว)")
 
     col_m1, col_m2, col_m3, col_m4 = st.columns(4)
     with col_m1:
@@ -599,18 +496,19 @@ with tab1:
         st.metric("Max Drawdown", f"{best_mdd * 100:.1f}%")
 
     st.markdown("#### ตัวอย่างการจัดสรรเงินตามกลยุทธ์ชนะเลิศ")
-    winner_weights = last_weights[best_strategy]
+    winner_weights = last_weights[best_key]
     action_plan = []
     for ticker, weight in zip(selected, winner_weights):
         action_plan.append({
             "รหัสหุ้น": ticker,
             "สัดส่วน (%)": f"{weight * 100:.2f}%",
-            "จำนวนเงิน (บาท)": f"{capital * weight:,.2f}",
+            f"จำนวนเงิน ({curr_code})": f"{capital * weight:,.2f}",
         })
     st.dataframe(pd.DataFrame(action_plan), use_container_width=True, hide_index=True)
 
     st.markdown("#### ตารางเปรียบเทียบทุกกลยุทธ์ (ค่าเฉลี่ยตลอดทุกรอบ)")
     display_summary = summary.copy()
+    display_summary.index = [STRAT_FULL_NAMES.get(k, k) for k in display_summary.index]
     display_summary["ann_return"] = (display_summary["ann_return"] * 100).round(1).astype(str) + "%"
     display_summary["ann_vol"] = (display_summary["ann_vol"] * 100).round(1).astype(str) + "%"
     display_summary["max_drawdown"] = (display_summary["max_drawdown"] * 100).round(1).astype(str) + "%"
@@ -618,33 +516,20 @@ with tab1:
     display_summary.columns = ["ผลตอบแทน/ปี", "ความผันผวน/ปี", "Sharpe ratio", "Max Drawdown"]
     st.dataframe(display_summary, use_container_width=True)
 
-    st.info(
-        "**A: Equal-weight** — แบ่งเงินเท่ากันทุกตัว  \n"
-        "**B: Markowitz** — คำนวณสัดส่วนด้วยสูตรคณิตศาสตร์ให้ Sharpe ratio สูงสุด  \n"
-        "**C: Market-cap** — ถ่วงน้ำหนักตามมูลค่าบริษัท ใหญ่กว่าได้สัดส่วนมากกว่า  \n"
-        "**D: Markowitz-Shrinkage** — เหมือน B แต่ลด estimation error ของข้อมูลด้วยเทคนิค Ledoit-Wolf shrinkage"
-    )
-    st.caption(f"ค่าสหสัมพันธ์เฉลี่ยระหว่างหุ้นที่เลือก: **{avg_corr:.2f}** (ยิ่งต่ำ ยิ่งกระจายความเสี่ยงได้ผลดี)")
-
-
-# ================= TAB 2: การเติบโตของเงินทุน =================
+# TAB 2: การเติบโตของเงินทุน
 with tab2:
-    st.subheader("เงินลงทุนสะสม ถ้าลงทุนต่อเนื่องตลอดช่วงทดสอบ (คิดทบต้นจริง + ค่าธรรมเนียม)")
-    curves = cumulative_growth(daily_returns, capital, cost_pct, test_window)
-    
-    # ดึงข้อมูล Benchmark ตามตัวเลือกใน Sidebar
+    st.subheader(f"เงินลงทุนสะสม ({curr_code} — คิดทบต้นจริง + ค่าธรรมเนียม Rebalance)")
+    curves = cumulative_growth_with_turnover(daily_returns, weight_history, capital, cost_pct, test_window)
     bench_raw, bench_used_symbol, bench_label = load_benchmark(benchmark_option, tuple(selected), years_back)
 
     fig_cum, ax_cum = plt.subplots(figsize=(10, 4.5), facecolor='#0f172a')
     ax_cum.set_facecolor('#1e293b')
     colors = ['#38bdf8', '#facc15', '#4ade80', '#c084fc']
     
-    # พล็อตกราฟกลยุทธ์พร้อมชื่อ Legend ภาษาอังกฤษที่สะอาดยิ่งขึ้น
-    for i, (name, curve) in enumerate(curves.items()):
-        lbl = STRAT_DISPLAY_NAMES.get(name, name)
+    for i, (key, curve) in enumerate(curves.items()):
+        lbl = STRAT_DISPLAY_NAMES.get(key, key)
         ax_cum.plot(curve.index, curve.values, label=lbl, color=colors[i % len(colors)], linewidth=1.6)
 
-    bench_note = ""
     if not bench_raw.empty:
         combined_index = next(iter(curves.values())).index
         if hasattr(combined_index, "tz") and combined_index.tz is not None:
@@ -656,148 +541,26 @@ with tab2:
             bench_curve = capital * (1 + bench_ret).cumprod()
             ax_cum.plot(bench_curve.index, bench_curve.values, label=f"{bench_label} ({bench_used_symbol})", linewidth=1.8,
                         linestyle="--", color="white")
-        else:
-            bench_note = f"ข้อมูล {bench_used_symbol} ไม่พอสำหรับช่วงเวลานี้"
-    else:
-        bench_note = f"ดึงข้อมูล Benchmark ({bench_used_symbol}) ไม่สำเร็จ"
 
     ax_cum.axhline(capital, color="gray", linewidth=0.7, linestyle=":")
     ax_cum.set_xlabel("Date", color='#94a3b8')
-    ax_cum.set_ylabel(f"Portfolio Value (THB)", color='#94a3b8')
-    ax_cum.set_title(f"Cumulative Growth -- Includes {cost_pct*100:.2f}% Cost Per Rebalance", color='white', fontweight='bold')
+    ax_cum.set_ylabel(f"Portfolio Value ({curr_code})", color='#94a3b8')
     ax_cum.tick_params(colors='#cbd5e1')
     ax_cum.grid(True, linestyle='--', alpha=0.2)
     ax_cum.legend(facecolor='#0f172a', edgecolor='#334155', labelcolor='white', loc="upper left", fontsize=9)
     st.pyplot(fig_cum)
-    
-    if bench_note:
-        st.caption(f"⚠️ {bench_note}")
 
-    if stress_option != "ไม่ระบุ":
-        st.subheader(f"ทดสอบเฉพาะช่วงวิกฤต: {stress_option}")
-        stress_ranges = {
-            "COVID-19 (ก.พ.–เม.ย. 2020)": ("2020-02-01", "2020-04-30"),
-            "เงินเฟ้อ/ดอกเบี้ยขาขึ้น (2022)": ("2022-01-01", "2022-12-31"),
-        }
-        s_start, s_end = stress_ranges[stress_option]
-        stress_returns = all_returns_full.loc[s_start:s_end]
-        if len(stress_returns) < 5:
-            st.warning("ข้อมูลย้อนหลังที่มีไม่ครอบคลุมช่วงนี้ — ลองเพิ่ม 'ข้อมูลย้อนหลังกี่ปี' ในตั้งค่าขั้นสูง")
-        else:
-            stress_rows = []
-            for name, w in last_weights.items():
-                total, ar, av, sh, mdd = evaluate(w, stress_returns)
-                stress_rows.append({"กลยุทธ์": name, "ผลตอบแทนรวมช่วงนี้": f"{total:.1%}", "Max Drawdown ช่วงนี้": f"{mdd:.1%}"})
-            st.dataframe(pd.DataFrame(stress_rows), use_container_width=True, hide_index=True)
-
-
-# ================= TAB 3: วิเคราะห์เชิงลึก =================
-with tab3:
-    st.markdown("#### ช่วงความเชื่อมั่น 95% และนัยสำคัญทางสถิติ (Paired t-test & Bootstrap)")
-    fig1, ax1 = plt.subplots(figsize=(7, 3.8), facecolor='#0f172a')
-    ax1.set_facecolor('#1e293b')
-    means, errs = [], []
-    for s in strategies:
-        vals = df[df.strategy == s]["sharpe"].dropna().values
-        mean, sd = vals.mean(), vals.std(ddof=1)
-        se = sd / np.sqrt(len(vals))
-        t_crit = stats.t.ppf(0.975, df=len(vals) - 1)
-        means.append(mean)
-        errs.append(t_crit * se)
-        
-    colors_bar = ["#38bdf8", "#facc15", "#4ade80", "#c084fc"][:len(strategies)]
-    labels_clean = [STRAT_DISPLAY_NAMES.get(s, s) for s in strategies]
-    ax1.bar(labels_clean, means, yerr=errs, capsize=8,
-            color=colors_bar, alpha=0.85, ecolor='white')
-    ax1.axhline(0, color="gray", linewidth=0.8)
-    ax1.set_ylabel(f"Sharpe ratio (mean of {n_folds} folds)", color='#94a3b8')
-    ax1.set_title("Sharpe Ratio with 95% Confidence Interval", color='white', fontweight='bold')
-    ax1.tick_params(colors='#cbd5e1')
-    ax1.grid(True, linestyle='--', alpha=0.2)
-    st.pyplot(fig1)
-
-    n_comparisons = len(strategies) * (len(strategies) - 1) // 2
-    bonferroni_alpha = 0.05 / n_comparisons
-    rows = []
-    for i in range(len(strategies)):
-        for j in range(i + 1, len(strategies)):
-            s1, s2 = strategies[i], strategies[j]
-            diff = (wide[s1] - wide[s2]).dropna()
-            t_stat, p_val = stats.ttest_rel(wide[s1], wide[s2])
-            p_boot = block_bootstrap_pvalue(diff.values, block_size=4, n_boot=2000)
-            rows.append({
-                "คู่เปรียบเทียบ": f"{STRAT_DISPLAY_NAMES.get(s1, s1)} vs {STRAT_DISPLAY_NAMES.get(s2, s2)}",
-                "p-value (t-test)": round(p_val, 4),
-                "p-value (block bootstrap)": round(p_boot, 4) if not np.isnan(p_boot) else "N/A",
-                "ผ่านเกณฑ์ Bonferroni?": "ผ่าน" if p_val < bonferroni_alpha else "ไม่ผ่าน",
-                "สรุป (เกณฑ์ปกติ p<0.05)": "ต่างกันจริง" if p_val < 0.05 else "ยังสรุปไม่ได้ชัดเจน",
-            })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    st.caption(f"เทียบทั้งหมด {n_comparisons} คู่พร้อมกัน ใช้เกณฑ์ Bonferroni (α = 0.05/{n_comparisons} ≈ {bonferroni_alpha:.4f}) เพื่อป้องกันการฟลุ๊คจากการเทียบหลายคู่")
-
-    if avg_delta > 0:
-        st.markdown("#### กลยุทธ์ D: Markowitz-Shrinkage ลดสัญญาณรบกวนได้แค่ไหน")
-        st.caption(
-            f"ค่าเฉลี่ยสัดส่วนการ 'หด' (shrinkage intensity) ที่สูตรเลือกเองตลอด {n_folds} รอบ: **{avg_delta:.1%}** "
-            "(0% = ไม่หดเลย, 100% = หดเต็มที่) ค่ายิ่งสูง แปลว่าข้อมูลมี Noise เยอะ สูตรเลยลดความผันผวนของน้ำหนักพอร์ตลง"
-        )
-
-    st.markdown("#### ใครนำอยู่ ณ จุดไหนของการทดสอบ")
-    fig_tally = win_tally_fig(df, strategies)
-    st.pyplot(fig_tally)
-
-    st.markdown("#### Correlation Matrix ระหว่างหุ้นที่เลือก")
-    fig_corr = correlation_matrix_fig(all_returns_full)
-    st.pyplot(fig_corr)
-
-    st.markdown("#### เส้นพรมแดนประสิทธิภาพ (Efficient Frontier) จากการจำลอง Monte Carlo")
-    fig_ef = efficient_frontier_fig(all_returns_full, last_weights)
-    st.pyplot(fig_ef)
-
-    if "B: Markowitz (สมการคณิตศาสตร์)" in weight_history:
-        st.markdown("#### สัดส่วนเปลี่ยนไปยังไงในแต่ละรอบ: Markowitz ปกติ เทียบกับ Shrinkage")
-        col_w1, col_w2 = st.columns(2)
-        with col_w1:
-            fig_wt = weight_evolution_fig(weight_history["B: Markowitz (สมการคณิตศาสตร์)"], selected, "Markowitz (B)")
-            st.pyplot(fig_wt)
-        with col_w2:
-            if "D: Markowitz-Shrinkage (ลดสัญญาณรบกวน)" in weight_history:
-                fig_wt_d = weight_evolution_fig(weight_history["D: Markowitz-Shrinkage (ลดสัญญาณรบกวน)"], selected, "Shrinkage (D)")
-                st.pyplot(fig_wt_d)
-
-
-# ================= TAB 4: แชร์ผลลัพธ์ (Social Sharing) =================
+# TAB 4: แชร์ผลลัพธ์
 with tab4:
     st.subheader("📣 แชร์สรุปผลลัพธ์พอร์ตของคุณ")
-    st.write("ดาวน์โหลดภาพการ์ดสรุปผลการทดสอบ เพื่อนำไปแบ่งปันหรือโพสต์ต่อบนโซเชียลมีเดีย")
-    
-    card_buf = create_share_card(best_strategy, best_return, best_sharpe, best_mdd, selected, capital)
-    st.image(card_buf, caption="ตัวอย่าง Social Share Card (ภาพความละเอียดสูง)", use_container_width=False, width=600)
-    
+    card_buf = create_share_card(best_key, best_return, best_sharpe, best_mdd, selected, capital, curr_name)
+    st.image(card_buf, width=600)
     st.download_button(
         label="📥 ดาวน์โหลดรูปการ์ดสรุปผล (PNG)",
         data=card_buf,
-        file_name="quantlab_portfolio_summary.png",
+        file_name="quantlab_summary.png",
         mime="image/png"
     )
-
-# ================= TAB 5: เกี่ยวกับข้อมูล & ข้อจำกัด =================
-with tab5:
-    st.subheader("ℹ️ แหล่งที่มาของข้อมูล และข้อจำกัดของระบบ")
-    st.markdown("""
-    #### 1. แหล่งข้อมูลราคา (Data Ingestion)
-    • ข้อมูลราคาหุ้นดึงผ่าน **Yahoo Finance API** โดยใช้ราคาปิดปรับปรุง (Adjusted Close Price) เพื่อสะท้อนผลปันผลและการแตกหุ้น  
-    • ระบบแคชข้อมูลไว้เป็นเวลา 12 ชั่วโมง เพื่อความรวดเร็วและหลีกเลี่ยงการติด Rate Limit  
-
-    #### 2. สมมติฐานทางคณิตศาสตร์และการเงิน
-    • **Risk-Free Rate ($R_f$):** กำหนดไว้ที่ $0.0\%$  
-    • **Rebalance Cost:** มีการหักค่าธรรมเนียมการซื้อขายตามอัตราที่ผู้ใช้กำหนดทุกครั้งที่มีการปรับพอร์ต  
-    • **Market Capitalization:** กลยุทธ์ C ใช้จำนวนหุ้นชำระแล้ว (Shares Outstanding) ปัจจุบัน  
-
-    #### 3. คำเตือนความเสี่ยง (Risk Disclaimer)
-    • ผลการจำลองนี้ไม่รวมปัจจัยเรื่อง **Slippage** และภาษี  
-    • การทดสอบย้อนหลังเป็นเพียงเครื่องมือช่วยศึกษารูปแบบสถิติในอดีต **ไม่สามารถใช้เป็นสิ่งยืนยันผลตอบแทนในอนาคตได้**
-    """)
 
 st.divider()
 st.caption("QuantLab Analytics Engine — เครื่องมือจำลองพอร์ตการลงทุนเชิงปริมาณเพื่อการเรียนรู้และวิจัยทางสถิติ")
