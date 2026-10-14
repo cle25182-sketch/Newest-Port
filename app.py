@@ -240,6 +240,26 @@ def get_weights(train_ret, train_last_price, shares_arr, n, use_marketcap, rf_ra
     return weights, (opt.success and opt_shrink.success), delta
 
 
+def block_bootstrap_pvalue(diff_values, block_size=4, n_boot=2000, seed=0):
+    """ทดสอบว่าค่าเฉลี่ยผลต่างต่างจาก 0 จริงไหม ด้วย moving block bootstrap -- ทนทานต่อการที่แต่ละรอบ
+    ไม่เป็นอิสระจากกันสมบูรณ์ (เพราะช่วง train ของรอบที่ติดกันทับซ้อนกันถึง 75%)"""
+    rng = np.random.default_rng(seed)
+    n = len(diff_values)
+    if n < block_size * 2:
+        return np.nan
+    observed_mean = diff_values.mean()
+    n_blocks = int(np.ceil(n / block_size))
+    boot_means = np.empty(n_boot)
+    for b in range(n_boot):
+        idx = []
+        for _ in range(n_blocks):
+            start = rng.integers(0, n - block_size + 1)
+            idx.extend(range(start, start + block_size))
+        boot_means[b] = diff_values[idx[:n]].mean()
+    boot_centered = boot_means - boot_means.mean()
+    return np.mean(np.abs(boot_centered) >= abs(observed_mean))
+
+
 def evaluate(w, test_ret, rf_rate):
     port_ret = test_ret.values @ w
     cum = np.cumprod(1 + port_ret)
@@ -395,6 +415,10 @@ with st.sidebar:
             "จำลองวิกฤตเฉพาะช่วง",
             ["ไม่ระบุ", "COVID-19 (ก.พ.–เม.ย. 2020)", "เงินเฟ้อ/ดอกเบี้ยขาขึ้น (2022)"]
         )
+        STRESS_RANGES = {
+            "COVID-19 (ก.พ.–เม.ย. 2020)": ("2020-02-01", "2020-04-30"),
+            "เงินเฟ้อ/ดอกเบี้ยขาขึ้น (2022)": ("2022-01-01", "2022-12-31"),
+        }
 
     run = st.button("เริ่มวิเคราะห์", type="primary", use_container_width=True)
 
@@ -459,10 +483,31 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 # TAB 1: สรุปผล
+wide = df.pivot(index="round", columns="strategy", values="sharpe")
+significantly_better_than_all = True
+for other in strategies:
+    if other == best_key:
+        continue
+    _, p_val = stats.ttest_rel(wide[best_key], wide[other])
+    if p_val >= 0.05:
+        significantly_better_than_all = False
+        break
+
 with tab1:
     st.subheader(f"สรุปผล: กลยุทธ์ที่ Sharpe ดีที่สุดในการทดสอบนี้ ({curr_code})")
     if n_failed > 0:
         st.warning(f"⚠️ มีการคำนวณ Markowitz ไม่ลู่เข้าจำนวน {n_failed}/{n_folds} รอบ (ระบบใช้ Equal-Weight สำรองในรอบดังกล่าว)")
+
+    if significantly_better_than_all:
+        st.success(
+            f"**{best_strategy}** ให้ Sharpe ratio ดีที่สุด และแตกต่างจากกลยุทธ์อื่นทุกตัวอย่างมีนัยสำคัญทางสถิติ "
+            f"(p < 0.05) ในการทดสอบ {n_folds} รอบนี้"
+        )
+    else:
+        st.info(
+            f"**{best_strategy}** ให้ Sharpe ratio เฉลี่ยสูงสุดในการทดสอบนี้ แต่ยัง**ไม่ต่างจากกลยุทธ์อื่นอย่างมีนัยสำคัญทางสถิติ** "
+            f"(ดูตาราง p-value ในแท็บ 'สถิติเชิงลึก') — ควรตีความว่า \"ยังแยกไม่ออกชัดเจนว่าวิธีไหนดีกว่าจริง\" มากกว่าฟันธงว่าตัวนี้ชนะ"
+        )
 
     col_m1, col_m2, col_m3, col_m4 = st.columns(4)
     with col_m1:
@@ -474,7 +519,7 @@ with tab1:
     with col_m4:
         st.metric("Max Drawdown", f"{best_mdd * 100:.1f}%")
 
-    st.markdown("#### ตัวอย่างการจัดสรรเงินตามกลยุทธ์ชนะเลิศ")
+    st.markdown(f"#### ตัวอย่างการจัดสรรเงินตามกลยุทธ์ชนะเลิศ: {best_strategy}")
     winner_weights = last_weights[best_key]
     action_plan = []
     for ticker, weight in zip(selected, winner_weights):
@@ -529,6 +574,24 @@ with tab2:
     ax_cum.legend(facecolor='#0f172a', edgecolor='#334155', labelcolor='white', loc="upper left", fontsize=9)
     st.pyplot(fig_cum)
 
+    if stress_option != "ไม่ระบุ":
+        st.markdown(f"#### ทดสอบเฉพาะช่วงวิกฤต: {stress_option}")
+        s_start, s_end = STRESS_RANGES[stress_option]
+        stress_returns = all_returns_full.loc[s_start:s_end]
+        if len(stress_returns) < 5:
+            st.warning("ข้อมูลย้อนหลังที่มีไม่ครอบคลุมช่วงนี้ — ลองเพิ่ม 'ข้อมูลย้อนหลังกี่ปี' ในตั้งค่าขั้นสูง")
+        else:
+            stress_rows = []
+            for key, w in last_weights.items():
+                total, ar, av, sh, mdd = evaluate(w, stress_returns, rf_rate_pct)
+                stress_rows.append({
+                    "กลยุทธ์": STRAT_FULL_NAMES.get(key, key),
+                    "ผลตอบแทนรวมช่วงนี้": f"{total:.1%}",
+                    f"Max Drawdown ช่วงนี้": f"{mdd:.1%}",
+                })
+            st.dataframe(pd.DataFrame(stress_rows), use_container_width=True, hide_index=True)
+            st.caption("ใช้สัดส่วนน้ำหนักจากรอบล่าสุดของแต่ละกลยุทธ์ ประเมินย้อนกลับเฉพาะช่วงวิกฤตที่เลือก (ไม่ใช่ walk-forward เต็มรูปแบบ เพราะช่วงสั้นเกินจะแบ่ง train/test ได้)")
+
 # TAB 3: วิเคราะห์สถิติเชิงลึก
 with tab3:
     st.subheader("🔬 วิเคราะห์สถิติเชิงลึกและประสิทธิภาพของกลยุทธ์")
@@ -536,7 +599,8 @@ with tab3:
     col_s1, col_s2 = st.columns(2)
     with col_s1:
         st.markdown("#### ค่าเฉลี่ยความเข้มข้นของการลดสัญญาณรบกวน (Ledoit-Wolf Delta)")
-        st.info(f"ค่าเฉลี่ย Delta ($\delta$) ตลอดการทดสอบคือ **{avg_delta:.4f}**\n\n*หมายเหตุ: หากค่า $\delta$ เข้าใกล้ 1 แปลว่า Covariance Matrix ดั้งเดิมมีสัญญาณรบกวนสูงมาก ระบบจึงให้น้ำหนักกับการปรับลดความผันผวน (Shrinkage Target) มากขึ้น*")
+        st.info(rf"ค่าเฉลี่ย Delta ($\delta$) ตลอดการทดสอบคือ **{avg_delta:.4f}**" + "\n\n" +
+                r"*หมายเหตุ: หากค่า $\delta$ เข้าใกล้ 1 แปลว่า Covariance Matrix ดั้งเดิมมีสัญญาณรบกวนสูงมาก ระบบจึงให้น้ำหนักกับการปรับลดความผันผวน (Shrinkage Target) มากขึ้น*")
     
     with col_s2:
         st.markdown("#### สรุปผลความเสี่ยงสูงสุด (Max Drawdown เปรียบเทียบ)")
@@ -544,6 +608,30 @@ with tab3:
         mdd_df = pd.DataFrame({"Max Drawdown (%)": mdd_summary.round(2)})
         mdd_df.index = [STRAT_FULL_NAMES.get(k, k) for k in mdd_df.index]
         st.dataframe(mdd_df, use_container_width=True)
+
+    st.markdown("#### ความแตกต่างระหว่างกลยุทธ์ เชื่อถือได้แค่ไหน (นัยสำคัญทางสถิติ)")
+    n_comparisons = len(strategies) * (len(strategies) - 1) // 2
+    bonferroni_alpha = 0.05 / n_comparisons if n_comparisons else 0.05
+    sig_rows = []
+    for i in range(len(strategies)):
+        for j in range(i + 1, len(strategies)):
+            s1, s2 = strategies[i], strategies[j]
+            diff = (wide[s1] - wide[s2]).dropna()
+            t_stat, p_val = stats.ttest_rel(wide[s1], wide[s2])
+            p_boot = block_bootstrap_pvalue(diff.values, block_size=4, n_boot=2000)
+            sig_rows.append({
+                "เปรียบเทียบ": f"{STRAT_FULL_NAMES.get(s1, s1)} vs {STRAT_FULL_NAMES.get(s2, s2)}",
+                "p-value (t-test)": round(p_val, 3),
+                "p-value (block bootstrap)": round(p_boot, 3) if not np.isnan(p_boot) else "N/A",
+                "ผ่านเกณฑ์ Bonferroni?": "ผ่าน" if p_val < bonferroni_alpha else "ไม่ผ่าน",
+                "สรุป (p<0.05)": "ต่างกันจริง" if p_val < 0.05 else "ยังสรุปไม่ได้ชัดเจน",
+            })
+    st.dataframe(pd.DataFrame(sig_rows), use_container_width=True, hide_index=True)
+    st.caption(
+        f"เทียบทั้งหมด {n_comparisons} คู่พร้อมกัน จึงใช้เกณฑ์ Bonferroni ที่เข้มกว่าปกติ (α ≈ {bonferroni_alpha:.4f}) "
+        "กันไม่ให้สุ่มเจอผลบวกปลอมจากการเทียบหลายคู่พร้อมกัน ส่วน p-value (block bootstrap) ไม่ยึดสมมติฐานว่าแต่ละรอบเป็นอิสระจากกัน "
+        "(เพราะ train ของรอบที่ติดกันทับซ้อนกันถึง 75%) ถ้าทั้งสองวิธีให้ข้อสรุปตรงกัน แปลว่าผลลัพธ์ทนทานต่อข้อสมมตินี้จริง"
+    )
 
     st.markdown("#### เมทริกซ์ความสัมพันธ์ของสินทรัพย์ในพอร์ต (Correlation Heatmap)")
     corr_matrix = all_returns_full.corr()
@@ -581,3 +669,10 @@ with tab5:
 
 st.divider()
 st.caption("QuantLab Analytics Engine — เครื่องมือจำลองพอร์ตการลงทุนเชิงปริมาณเพื่อการเรียนรู้และวิจัยทางสถิติ")
+st.caption(
+    "⚠️ ผลลัพธ์ทั้งหมดคำนวณจากข้อมูลราคาหุ้นในอดีต (backtest) เท่านั้น ไม่ใช่การรับประกันผลตอบแทนในอนาคต "
+    "ยังไม่รวมภาษี เครื่องมือนี้จัดทำเพื่อการศึกษาและวิจัยทางสถิติ ไม่ใช่คำแนะนำการลงทุน และไม่ใช่บริการที่ได้รับอนุญาตจาก ก.ล.ต.\n\n"
+    "ข้อสมมติที่ควรรู้: (1) กลยุทธ์ Market-cap ใช้จำนวนหุ้นที่ออกจำหน่ายปัจจุบัน คูณราคาย้อนหลัง เป็นค่าประมาณมูลค่าตลาดในอดีต "
+    "(หุ้นที่หาข้อมูลไม่ได้จะใช้ค่ามัธยฐานของหุ้นอื่นในพอร์ตแทน) (2) แต่ละรอบ walk-forward ใช้ข้อมูล train ที่ทับซ้อนกันบางส่วน "
+    "จึงไม่เป็นอิสระจากกันทั้งหมด ผลการทดสอบนัยสำคัญทางสถิติจึงควรตีความอย่างระมัดระวัง"
+    )
