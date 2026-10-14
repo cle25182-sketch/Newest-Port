@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import streamlit as st
 
 st.set_page_config(
-    page_title="QuantLab — ระบบจำลองและจัดพอร์ตหุ้นเชิงปริมาณ",
+    page_title="QuantLab kuy — ระบบจำลองและจัดพอร์ตหุ้นเชิงปริมาณ",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
