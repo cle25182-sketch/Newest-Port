@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import streamlit as st
 
 st.set_page_config(
-    page_title="QuantLab kuy — ระบบจำลองและจัดพอร์ตหุ้นเชิงปริมาณ",
+    page_title="QuantLab — ระบบจำลองและจัดพอร์ตหุ้นเชิงปริมาณ",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -258,6 +258,84 @@ def block_bootstrap_pvalue(diff_values, block_size=4, n_boot=2000, seed=0):
         boot_means[b] = diff_values[idx[:n]].mean()
     boot_centered = boot_means - boot_means.mean()
     return np.mean(np.abs(boot_centered) >= abs(observed_mean))
+
+
+def efficient_frontier_fig(all_returns, weights_by_name, strat_names, n_portfolios=2500):
+    mu, cov = all_returns.mean().values, all_returns.cov().values
+    n = len(mu)
+    rng = np.random.default_rng(0)
+    res = np.zeros((n_portfolios, 3))
+    for i in range(n_portfolios):
+        w = rng.random(n)
+        w /= w.sum()
+        port_ret = w @ mu * 252
+        port_vol = np.sqrt(max(w @ cov @ w, 0)) * np.sqrt(252)
+        res[i] = [port_vol, port_ret, port_ret / port_vol if port_vol > 1e-10 else 0]
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.5), facecolor='#0f172a')
+    ax.set_facecolor('#0f172a')
+    sc = ax.scatter(res[:, 0] * 100, res[:, 1] * 100, c=res[:, 2], cmap="viridis", s=6, alpha=0.6)
+    cb = plt.colorbar(sc, ax=ax, label="Sharpe ratio")
+    cb.ax.yaxis.label.set_color('white')
+    cb.ax.tick_params(colors='white')
+
+    markers = list("o*D^v<>")
+    for idx, (key, w) in enumerate(weights_by_name.items()):
+        port_ret = w @ mu * 252
+        port_vol = np.sqrt(max(w @ cov @ w, 0)) * np.sqrt(252)
+        ax.scatter(port_vol * 100, port_ret * 100, marker=markers[idx % len(markers)], s=200,
+                   edgecolor="white", linewidth=1.3, label=strat_names.get(key, key).split(":")[0], zorder=5)
+
+    ax.set_xlabel("Volatility / annualized (%)", color='white')
+    ax.set_ylabel("Expected Return / annualized (%)", color='white')
+    ax.set_title("Efficient Frontier", color='white')
+    ax.tick_params(colors='white')
+    leg = ax.legend(loc="lower right", fontsize=8, facecolor='#0f172a', edgecolor='#334155')
+    for text in leg.get_texts():
+        text.set_color('white')
+    plt.tight_layout()
+    return fig
+
+
+def weight_evolution_fig(weight_df, tickers, label):
+    fig, ax = plt.subplots(figsize=(6, 4), facecolor='#0f172a')
+    ax.set_facecolor('#0f172a')
+    ax.stackplot(weight_df.index, [weight_df[t] * 100 for t in tickers], labels=tickers, alpha=0.85)
+    ax.set_xlabel("Walk-forward round", color='white')
+    ax.set_ylabel("Allocation Ratio (%)", color='white')
+    ax.set_title(f"Weight Evolution: {label}", color='white')
+    ax.set_ylim(0, 100)
+    ax.tick_params(colors='white')
+    leg = ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=min(len(tickers), 5),
+                     fontsize=7, facecolor='#0f172a', edgecolor='#334155')
+    for text in leg.get_texts():
+        text.set_color('white')
+    plt.tight_layout()
+    return fig
+
+
+def win_tally_fig(df, strategies, strat_names):
+    wide_sh = df.pivot(index="round", columns="strategy", values="sharpe")
+    winners = wide_sh.idxmax(axis=1)
+    tally = pd.DataFrame(0, index=wide_sh.index, columns=strategies)
+    for rnd in wide_sh.index:
+        tally.loc[rnd, winners[rnd]] = 1
+    cum_tally = tally.cumsum()
+
+    fig, ax = plt.subplots(figsize=(7.5, 4), facecolor='#0f172a')
+    ax.set_facecolor('#0f172a')
+    for s in strategies:
+        ax.plot(cum_tally.index, cum_tally[s], marker='o', markersize=3, linewidth=1.4,
+                label=strat_names.get(s, s).split(":")[0])
+    ax.set_xlabel("Walk-forward round", color='white')
+    ax.set_ylabel("Cumulative rounds won (highest Sharpe)", color='white')
+    ax.set_title("Running Win Tally by Round", color='white')
+    ax.tick_params(colors='white')
+    leg = ax.legend(loc="upper left", fontsize=8, facecolor='#0f172a', edgecolor='#334155')
+    for text in leg.get_texts():
+        text.set_color('white')
+    plt.tight_layout()
+    return fig
 
 
 def evaluate(w, test_ret, rf_rate):
@@ -646,6 +724,30 @@ with tab3:
     plt.title("Asset Return Correlation", color='white', fontsize=11, pad=15)
     st.pyplot(fig_corr)
 
+    st.markdown("#### เส้นพรมแดนประสิทธิภาพ (Efficient Frontier) จากหุ้นที่เลือกจริง")
+    fig_ef = efficient_frontier_fig(all_returns_full, last_weights, STRAT_FULL_NAMES)
+    st.pyplot(fig_ef)
+    st.caption("จุดสีคือพอร์ตสุ่ม 2,500 แบบจากหุ้นที่เลือกจริง สัญลักษณ์ขอบขาวคือตำแหน่งของแต่ละกลยุทธ์ (สัดส่วนจากรอบล่าสุด)")
+
+    st.markdown("#### ใครนำอยู่ ณ จุดไหนของการทดสอบ")
+    fig_tally = win_tally_fig(df, strategies, STRAT_FULL_NAMES)
+    st.pyplot(fig_tally)
+    st.caption("นับสะสมว่าถึงรอบนั้น แต่ละกลยุทธ์ชนะ (Sharpe สูงสุดในรอบ) ไปแล้วกี่รอบ — เส้นที่อยู่บนสุดตอนจบ คือกลยุทธ์ที่ชนะบ่อยที่สุดโดยรวม")
+
+    if "markowitz" in weight_history and "shrinkage" in weight_history:
+        st.markdown("#### สัดส่วนเปลี่ยนไปยังไงในแต่ละรอบ: Markowitz ปกติ เทียบกับ Shrinkage")
+        col_w1, col_w2 = st.columns(2)
+        with col_w1:
+            fig_wt_b = weight_evolution_fig(weight_history["markowitz"], selected, "Markowitz (B)")
+            st.pyplot(fig_wt_b)
+        with col_w2:
+            fig_wt_d = weight_evolution_fig(weight_history["shrinkage"], selected, "Shrinkage (D)")
+            st.pyplot(fig_wt_d)
+        st.caption(
+            "ถ้า Shrinkage ได้ผลจริง สัดส่วนฝั่งขวาควรจะ 'กระโดดไปมารุนแรงน้อยกว่า' ฝั่งซ้าย เพราะ estimation error "
+            "ถูกลดลงแล้ว ทำให้สูตรไม่แกว่งตามสัญญาณรบกวนในข้อมูลมากเกินไป"
+        )
+
 # TAB 4: แชร์ผลลัพธ์
 with tab4:
     st.subheader("📣 แชร์สรุปผลลัพธ์พอร์ตของคุณ")
@@ -657,6 +759,10 @@ with tab4:
         file_name="quantlab_summary.png",
         mime="image/png"
     )
+
+    st.markdown("#### ดาวน์โหลดข้อมูลดิบ")
+    csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button("⬇️ ผลดิบทุกรอบ (CSV)", csv_bytes, "walk_forward_results.csv", "text/csv")
 
 # TAB 5: เกี่ยวกับข้อมูล
 with tab5:
@@ -675,4 +781,4 @@ st.caption(
     "ข้อสมมติที่ควรรู้: (1) กลยุทธ์ Market-cap ใช้จำนวนหุ้นที่ออกจำหน่ายปัจจุบัน คูณราคาย้อนหลัง เป็นค่าประมาณมูลค่าตลาดในอดีต "
     "(หุ้นที่หาข้อมูลไม่ได้จะใช้ค่ามัธยฐานของหุ้นอื่นในพอร์ตแทน) (2) แต่ละรอบ walk-forward ใช้ข้อมูล train ที่ทับซ้อนกันบางส่วน "
     "จึงไม่เป็นอิสระจากกันทั้งหมด ผลการทดสอบนัยสำคัญทางสถิติจึงควรตีความอย่างระมัดระวัง"
-    )
+                    )
