@@ -98,15 +98,15 @@ def load_benchmark(bench_choice, tickers, years_back):
     start_date = (datetime.today() - timedelta(days=years_back * 365)).strftime("%Y-%m-%d")
     
     symbol_map = {
-        "🇹🇭 SET Index (หุ้นไทย)": (["^SET.BK", "TDEX.BK"], "SET Index"),
-        "🇺🇸 S&P 500 (หุ้นใหญ่สหรัฐฯ)": (["^GSPC", "SPY"], "S&P 500"),
-        "🚀 Nasdaq 100 (หุ้นเทคฯ สหรัฐฯ)": (["^NDX", "QQQ"], "Nasdaq 100"),
-        "🇯🇵 Nikkei 225 (หุ้นญี่ปุ่น)": (["^N225", "EWJ"], "Nikkei 225"),
-        "🇭🇰 Hang Seng Index (หุ้นฮ่องกง)": (["^HSI", "2800.HK"], "Hang Seng"),
-        "🌐 MSCI ACWI (หุ้นทั่วโลก / พอร์ตผสม)": (["ACWI", "URTH"], "MSCI ACWI"),
+        "SET Index (หุ้นไทย)": (["^SET.BK", "TDEX.BK"], "SET Index"),
+        "S&P 500 (หุ้นใหญ่สหรัฐฯ)": (["^GSPC", "SPY"], "S&P 500"),
+        "Nasdaq 100 (หุ้นเทคฯ สหรัฐฯ)": (["^NDX", "QQQ"], "Nasdaq 100"),
+        "Nikkei 225 (หุ้นญี่ปุ่น)": (["^N225", "EWJ"], "Nikkei 225"),
+        "Hang Seng Index (หุ้นฮ่องกง)": (["^HSI", "2800.HK"], "Hang Seng"),
+        "MSCI ACWI (หุ้นทั่วโลก / พอร์ตผสม)": (["ACWI", "URTH"], "MSCI ACWI"),
     }
     
-    if bench_choice == "⚡ อัตโนมัติ (Auto-detect)":
+    if bench_choice == "อัตโนมัติ (Auto-detect)":
         if all(t.endswith(".BK") for t in tickers):
             symbols, label = ["^SET.BK", "TDEX.BK"], "SET Index"
         elif all(t.endswith(".T") for t in tickers):
@@ -460,7 +460,7 @@ with st.sidebar:
     selected_raw = list(dict.fromkeys([t.strip().upper() for t in ticker_input.split(",") if t.strip()]))
 
     if len(selected_raw) > MAX_TICKERS_ALLOWED:
-        st.warning(f"⚠️ ระบบจำกัดสูงสุดที่ {MAX_TICKERS_ALLOWED} หุ้น (เลือก {MAX_TICKERS_ALLOWED} ตัวแรกให้)")
+        st.warning(f"ระบบจำกัดสูงสุดที่ {MAX_TICKERS_ALLOWED} หุ้น (เลือก {MAX_TICKERS_ALLOWED} ตัวแรกให้)")
         selected = selected_raw[:MAX_TICKERS_ALLOWED]
     else:
         selected = selected_raw
@@ -472,13 +472,13 @@ with st.sidebar:
     benchmark_option = st.selectbox(
         "ตัวเปรียบเทียบดัชนี (Benchmark)",
         [
-            "⚡ อัตโนมัติ (Auto-detect)",
-            "🇹🇭 SET Index (หุ้นไทย)",
-            "🇺🇸 S&P 500 (หุ้นใหญ่สหรัฐฯ)",
-            "🚀 Nasdaq 100 (หุ้นเทคฯ สหรัฐฯ)",
-            "🇯🇵 Nikkei 225 (หุ้นญี่ปุ่น)",
-            "🇭🇰 Hang Seng Index (หุ้นฮ่องกง)",
-            "🌐 MSCI ACWI (หุ้นทั่วโลก / พอร์ตผสม)"
+            "อัตโนมัติ (Auto-detect)",
+            "SET Index (หุ้นไทย)",
+            "S&P 500 (หุ้นใหญ่สหรัฐฯ)",
+            "Nasdaq 100 (หุ้นเทคฯ สหรัฐฯ)",
+            "Nikkei 225 (หุ้นญี่ปุ่น)",
+            "Hang Seng Index (หุ้นฮ่องกง)",
+            "MSCI ACWI (หุ้นทั่วโลก / พอร์ตผสม)"
         ],
         help="เลือกดัชนีอ้างอิงเพื่อเปรียบเทียบผลตอบแทนกับพอร์ตของคุณ"
     )
@@ -501,7 +501,7 @@ with st.sidebar:
     run = st.button("เริ่มวิเคราะห์", type="primary", use_container_width=True)
 
 if not run:
-    st.info("👈 ปรับแต่งตัวเลือกทางซ้ายมือ แล้วกด **เริ่มวิเคราะห์** เพื่อประมวลผล")
+    st.info("ปรับแต่งตัวเลือกทางซ้ายมือ แล้วกด **เริ่มวิเคราะห์** เพื่อประมวลผล")
     st.stop()
 
 if len(selected) < 2:
@@ -512,7 +512,7 @@ with st.spinner("กำลังดึงราคาหุ้นและปร
     data, valid_tickers, error_msg = load_price_data(tuple(selected), years_back)
     
     if error_msg:
-        st.error(f"⚠️ การดึงข้อมูลล้มเหลว: {error_msg}")
+        st.error(f"การดึงข้อมูลล้มเหลว: {error_msg}")
         st.stop()
 
 selected = valid_tickers
@@ -553,11 +553,11 @@ best_sharpe = summary.loc[best_key, "sharpe"]
 best_mdd = summary.loc[best_key, "max_drawdown"]
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 สรุป", 
-    "📈 เติบโต", 
-    "🔬 สถิติเชิงลึก", 
-    "📣 แชร์",
-    "ℹ️ ข้อมูล"
+    "สรุป", 
+    "เติบโต", 
+    "สถิติเชิงลึก", 
+    "แชร์",
+    "ข้อมูล"
 ])
 
 # TAB 1: สรุปผล
@@ -574,7 +574,7 @@ for other in strategies:
 with tab1:
     st.subheader(f"สรุปผล: กลยุทธ์ที่ Sharpe ดีที่สุดในการทดสอบนี้ ({curr_code})")
     if n_failed > 0:
-        st.warning(f"⚠️ มีการคำนวณ Markowitz ไม่ลู่เข้าจำนวน {n_failed}/{n_folds} รอบ (ระบบใช้ Equal-Weight สำรองในรอบดังกล่าว)")
+        st.warning(f"มีการคำนวณ Markowitz ไม่ลู่เข้าจำนวน {n_failed}/{n_folds} รอบ (ระบบใช้ Equal-Weight สำรองในรอบดังกล่าว)")
 
     if significantly_better_than_all:
         st.success(
@@ -750,11 +750,11 @@ with tab3:
 
 # TAB 4: แชร์ผลลัพธ์
 with tab4:
-    st.subheader("📣 แชร์สรุปผลลัพธ์พอร์ตของคุณ")
+    st.subheader("แชร์สรุปผลลัพธ์พอร์ตของคุณ")
     card_buf = create_share_card(best_key, best_return, best_sharpe, best_mdd, selected, capital, curr_name)
     st.image(card_buf, width=600)
     st.download_button(
-        label="📥 ดาวน์โหลดรูปการ์ดสรุปผล (PNG)",
+        label="ดาวน์โหลดรูปการ์ดสรุปผล (PNG)",
         data=card_buf,
         file_name="quantlab_summary.png",
         mime="image/png"
@@ -762,11 +762,11 @@ with tab4:
 
     st.markdown("#### ดาวน์โหลดข้อมูลดิบ")
     csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
-    st.download_button("⬇️ ผลดิบทุกรอบ (CSV)", csv_bytes, "walk_forward_results.csv", "text/csv")
+    st.download_button("ผลดิบทุกรอบ (CSV)", csv_bytes, "walk_forward_results.csv", "text/csv")
 
 # TAB 5: เกี่ยวกับข้อมูล
 with tab5:
-    st.subheader("ℹ️ ข้อมูลระบบและข้อจำกัดการทดสอบ")
+    st.subheader("ข้อมูลระบบและข้อจำกัดการทดสอบ")
     st.markdown("""
     - **Walk-Forward Validation**: จำลองการลงทุนเสมือนจริงโดยตัดข้อมูลออกเป็นช่วงๆ (Train และ Test) ป้องกันการรู้ล่วงหน้า (Look-ahead bias)
     - **Rebalance Cost**: คิดค่าธรรมเนียมซื้อขายเฉพาะสัดส่วนที่มีการเปลี่ยนแปลงจริง (Turnover Rate) เพื่อความสมจริง
@@ -776,7 +776,7 @@ with tab5:
 st.divider()
 st.caption("QuantLab Analytics Engine — เครื่องมือจำลองพอร์ตการลงทุนเชิงปริมาณเพื่อการเรียนรู้และวิจัยทางสถิติ")
 st.caption(
-    "⚠️ ผลลัพธ์ทั้งหมดคำนวณจากข้อมูลราคาหุ้นในอดีต (backtest) เท่านั้น ไม่ใช่การรับประกันผลตอบแทนในอนาคต "
+    "ผลลัพธ์ทั้งหมดคำนวณจากข้อมูลราคาหุ้นในอดีต (backtest) เท่านั้น ไม่ใช่การรับประกันผลตอบแทนในอนาคต "
     "ยังไม่รวมภาษี เครื่องมือนี้จัดทำเพื่อการศึกษาและวิจัยทางสถิติ ไม่ใช่คำแนะนำการลงทุน และไม่ใช่บริการที่ได้รับอนุญาตจาก ก.ล.ต.\n\n"
     "ข้อสมมติที่ควรรู้: (1) กลยุทธ์ Market-cap ใช้จำนวนหุ้นที่ออกจำหน่ายปัจจุบัน คูณราคาย้อนหลัง เป็นค่าประมาณมูลค่าตลาดในอดีต "
     "(หุ้นที่หาข้อมูลไม่ได้จะใช้ค่ามัธยฐานของหุ้นอื่นในพอร์ตแทน) (2) แต่ละรอบ walk-forward ใช้ข้อมูล train ที่ทับซ้อนกันบางส่วน "
